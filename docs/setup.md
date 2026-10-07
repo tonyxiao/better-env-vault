@@ -160,8 +160,17 @@ better-env-vault serve --schema ./project-a/.env.schema ./project-b/.env.schema
 
 `serve` binds to loopback and opens a one-time browser launch link. The browser
 clears the link's fragment immediately, exchanges it for an HttpOnly session
-cookie, and keeps the mutation token in memory. Visiting the bare URL in a new
-browser session requires a new local launch. The app validates Host and Origin,
+cookie, and keeps the mutation token in memory. Each new browser needs its own
+one-time link. In the running server's terminal, type `link` to obtain a fresh
+link or `open` to open your default browser. Links expire after five minutes;
+issuing another does not disconnect existing browsers. For manual launch:
+
+```bash
+better-env-vault serve --schema ./path/to/.env.schema --no-open --print-launch-url
+```
+
+Copy the one-time link into the browser you want to connect. Opening the plain
+address does not authenticate a new browser. The app validates Host and Origin,
 requires a session for all API reads, and sends no-store responses.
 
 The matrix shows schema defaults, explicit overrides, inherited values, and

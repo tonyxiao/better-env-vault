@@ -30,10 +30,19 @@ interface Cell {
   environment: string;
   variable: ResolvedVariable;
 }
+class ApiError extends Error {
+  constructor(
+    message: string,
+    public code?: string,
+  ) {
+    super(message);
+  }
+}
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, { cache: "no-store", ...options });
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error ?? "Request failed.");
+  if (!response.ok)
+    throw new ApiError(data.error ?? "Request failed.", data.code);
   return data;
 }
 
@@ -44,6 +53,7 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [needsConnection, setNeedsConnection] = useState(false);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
   const [cell, setCell] = useState<Cell>();
@@ -51,6 +61,18 @@ function App() {
   const [addName, setAddName] = useState("");
   const token = useRef("");
   const loadId = useRef(0);
+  const disconnect = useCallback(() => {
+    setNeedsConnection(true);
+    setProjects([]);
+    setProject("");
+    setMatrix(undefined);
+    setCell(undefined);
+    setModal(undefined);
+    setError("");
+    setNotice("");
+    token.current = "";
+    ++loadId.current;
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -60,12 +82,18 @@ function App() {
     if (launchToken) history.replaceState(null, "", location.pathname);
     void (async () => {
       try {
-        if (launchToken)
-          await request("/api/session", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token: launchToken }),
-          });
+        if (launchToken) {
+          try {
+            await request("/api/session", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ token: launchToken }),
+            });
+          } catch (error) {
+            if (!(error instanceof ApiError && error.code === "session"))
+              throw error;
+          }
+        }
         const response = await request<{
           projects: Project[];
           mutationToken: string;
@@ -75,13 +103,17 @@ function App() {
         setProjects(response.projects);
         setProject(response.projects[0]?.id ?? "");
       } catch (error) {
-        if (!cancelled) setError((error as Error).message);
+        if (!cancelled) {
+          if (error instanceof ApiError && error.code === "session")
+            disconnect();
+          else setError((error as Error).message);
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [disconnect]);
 
   const refresh = useCallback(async () => {
     if (!project) return;
@@ -94,11 +126,14 @@ function App() {
       );
       if (loadId.current === id) setMatrix(response);
     } catch (error) {
-      if (loadId.current === id) setError((error as Error).message);
+      if (loadId.current === id) {
+        if (error instanceof ApiError && error.code === "session") disconnect();
+        else setError((error as Error).message);
+      }
     } finally {
       if (loadId.current === id) setBusy(false);
     }
-  }, [project]);
+  }, [project, disconnect]);
   useEffect(() => {
     setMatrix(undefined);
     setCell(undefined);
@@ -128,15 +163,19 @@ function App() {
       setNotice("Saved. Values are available on the next environment load.");
       await refresh();
     } catch (error) {
-      setError((error as Error).message);
+      if (error instanceof ApiError && error.code === "session") disconnect();
+      else setError((error as Error).message);
     } finally {
       setBusy(false);
     }
   }
   async function reveal(environment: string, name: string) {
-    return request<{ value?: string; explicitValue?: string; notes: string }>(
-      `/api/reveal?project=${encodeURIComponent(project)}`,
-      {
+    try {
+      return await request<{
+        value?: string;
+        explicitValue?: string;
+        notes: string;
+      }>(`/api/reveal?project=${encodeURIComponent(project)}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -147,8 +186,11 @@ function App() {
           name,
           fingerprint: matrix?.fingerprint,
         }),
-      },
-    );
+      });
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "session") disconnect();
+      throw error;
+    }
   }
 
   const rows = matrix?.resolutions[0]?.variables ?? [];
@@ -182,6 +224,35 @@ function App() {
     setCell(undefined);
     setModal(undefined);
   };
+  if (needsConnection)
+    return (
+      <div className="app">
+        <header>
+          <a className="brand" href="/">
+            <span className="mark">E</span>Better Env Vault
+          </a>
+        </header>
+        <main>
+          <section className="connection-panel">
+            <p className="eyebrow">BROWSER CONNECTION</p>
+            <h1>Connect this browser</h1>
+            <p>
+              This browser needs its own one-time launch link before it can
+              access your environments.
+            </p>
+            <p>
+              In the terminal running the app, type <code>link</code> and open
+              the fresh link in this browser. You can also type{" "}
+              <code>open</code> to open your default browser.
+            </p>
+            <p>Opening the plain address does not connect a new browser.</p>
+            <button className="secondary" onClick={() => location.reload()}>
+              Retry connection
+            </button>
+          </section>
+        </main>
+      </div>
+    );
   return (
     <div className="app">
       <header>

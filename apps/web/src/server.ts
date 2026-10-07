@@ -103,6 +103,14 @@ export async function startServer(options: {
       )
         throw new VaultError("Unexpected request origin.", "request", 403);
       const url = new URL(request.url ?? "/", `http://${host}`);
+      const cookieName = `bev-session-${port}`;
+      const cookie =
+        request.headers.cookie
+          ?.split(";")
+          .map((c) => c.trim())
+          .find((c) => c.startsWith(`${cookieName}=`))
+          ?.slice(cookieName.length + 1) ?? "";
+      const connected = equal(cookie, credential);
       if (url.pathname === "/api/session" && request.method === "POST") {
         if (
           origin !== `http://${host}` ||
@@ -114,6 +122,12 @@ export async function startServer(options: {
             403,
           );
         const data = (await body(request)) as { token?: string };
+        // A used bookmark must not disconnect a browser that already has a
+        // valid session. The same link still cannot authorize another browser.
+        if (connected) {
+          json(response, 200, { connected: true });
+          return;
+        }
         const match =
           typeof data?.token === "string"
             ? [...launchTokens].find(
@@ -123,28 +137,22 @@ export async function startServer(options: {
             : undefined;
         if (!match)
           throw new VaultError(
-            "Launch link expired. Restart the server to open a new session.",
+            "This browser link expired or was already used. Get a fresh one-time link from the running server.",
             "session",
             401,
           );
         launchTokens.delete(match[0]);
         response.setHeader(
           "Set-Cookie",
-          `bev-session=${credential}; HttpOnly; SameSite=Strict; Path=/`,
+          `${cookieName}=${credential}; HttpOnly; SameSite=Strict; Path=/`,
         );
         json(response, 200, { connected: true });
         return;
       }
       if (url.pathname.startsWith("/api/")) {
-        const cookie =
-          request.headers.cookie
-            ?.split(";")
-            .map((c) => c.trim())
-            .find((c) => c.startsWith("bev-session="))
-            ?.slice("bev-session=".length) ?? "";
-        if (!equal(cookie, credential))
+        if (!connected)
           throw new VaultError(
-            "Launch the app with better-env-vault serve to connect.",
+            "This browser is not connected. Open a fresh one-time browser link from the running server.",
             "session",
             401,
           );

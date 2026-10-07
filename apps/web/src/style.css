@@ -671,3 +671,22 @@ td {
 .initial-value > label:last-child {
   margin-bottom: 0;
 }
+
+.connection-panel {
+  max-width: 660px;
+  margin: 60px auto;
+  padding: 32px;
+  background: #fff;
+  border: 1px solid #dfe6e2;
+  border-radius: 12px;
+}
+.connection-panel p {
+  color: #718179;
+}
+.connection-panel code {
+  color: #17634e;
+  font-weight: 600;
+}
+.connection-panel button {
+  margin-top: 12px;
+}

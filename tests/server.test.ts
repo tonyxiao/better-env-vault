@@ -6,6 +6,52 @@ import { OnePasswordProvider } from "../packages/core/src/provider.js";
 import { VaultError } from "../packages/core/src/errors.js";
 import { vi } from "vitest";
 
+it("connects another browser with a fresh link, preserves valid sessions, and isolates server cookies by port", async () => {
+  const schema = await fixture("# @public\nKEY=example\n");
+  const provider = new MemoryProvider();
+  const first = await startServer({ schemas: [schema.path], provider });
+  const second = await startServer({ schemas: [schema.path], provider });
+  const connect = async (app: typeof first, token: string, cookie?: string) =>
+    fetch(app.url + "/api/session", {
+      method: "POST",
+      headers: {
+        Origin: app.url,
+        "Content-Type": "application/json",
+        ...(cookie ? { Cookie: cookie } : {}),
+      },
+      body: JSON.stringify({ token }),
+    });
+  try {
+    expect((await fetch(first.url + "/api/projects")).status).toBe(401);
+    const initial = await connect(first, first.bootstrap);
+    const cookie = initial.headers.get("set-cookie")!.split(";")[0];
+    expect((await connect(first, first.bootstrap)).status).toBe(401);
+    expect((await connect(first, first.bootstrap, cookie)).status).toBe(200);
+    const fresh = new URL(first.issueLaunchUrl()).hash.slice(
+      "#session=".length,
+    );
+    const otherBrowser = await connect(first, fresh);
+    expect(otherBrowser.status).toBe(200);
+    expect((await connect(first, fresh)).status).toBe(401);
+    const separateServer = await connect(second, second.bootstrap);
+    const separateCookie = separateServer.headers
+      .get("set-cookie")!
+      .split(";")[0];
+    expect(cookie.split("=")[0]).not.toBe(separateCookie.split("=")[0]);
+    const sharedJar = { Cookie: cookie + "; " + separateCookie };
+    expect(
+      (await fetch(first.url + "/api/projects", { headers: sharedJar })).status,
+    ).toBe(200);
+    expect(
+      (await fetch(second.url + "/api/projects", { headers: sharedJar }))
+        .status,
+    ).toBe(200);
+  } finally {
+    await first.close();
+    await second.close();
+  }
+});
+
 it("reconnects after expired provider authorization when the user refreshes", async () => {
   const schema = await fixture("# @optional\nTOKEN=\n");
   const expired = new MemoryProvider(),
