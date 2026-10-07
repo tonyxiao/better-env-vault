@@ -2,7 +2,6 @@
 import { Command } from "commander";
 import { spawn } from "node:child_process";
 import { writeFile } from "node:fs/promises";
-import { createInterface } from "node:readline";
 import {
   loadSchema,
   selectEnvironment,
@@ -23,7 +22,7 @@ import {
   shellExport,
 } from "../../core/src/export.js";
 import { safeError, VaultError } from "../../core/src/errors.js";
-import { startServer } from "../../../apps/web/src/server.js";
+import { serve, webOptions } from "./serve.js";
 
 const program = new Command()
   .enablePositionalOptions()
@@ -138,60 +137,16 @@ common(
       });
     });
   });
-program
-  .command("serve")
-  .description("Open the local environment matrix")
-  .option("--schema <path...>", "Schema paths available in this session", [
-    ".env.schema",
-  ])
-  .option("--port <number>", "Loopback port (0 chooses an available port)", "0")
-  .option("--no-open", "Start without opening the browser")
-  .option(
-    "--print-launch-url",
-    "Print a one-time link for connecting a browser manually",
-  )
-  .action(async (options) => {
-    const port = Number(options.port);
-    if (!Number.isInteger(port) || port < 0 || port > 65535)
-      throw new VaultError("Invalid port.");
-    const app = await startServer({ schemas: options.schema, port });
-    process.stdout.write(`Better Env Vault is running at ${app.url}\n`);
-    function openBrowser(launchUrl: string) {
-      const command =
-        process.platform === "darwin"
-          ? "open"
-          : process.platform === "win32"
-            ? "explorer"
-            : "xdg-open";
-      const browser = spawn(command, [launchUrl], { stdio: "ignore" });
-      browser.on("error", () =>
-        process.stderr.write(
-          "Could not open the browser. Type link in this terminal to get a one-time browser link.\n",
-        ),
-      );
-    }
-    if (options.open) openBrowser(app.launchUrl);
-    if (options.printLaunchUrl)
-      process.stdout.write(app.issueLaunchUrl() + "\n");
-    if (process.stdin.isTTY) {
-      process.stdout.write(
-        "Type open to open another browser, or link to get a fresh one-time browser link.\n",
-      );
-      const input = createInterface({ input: process.stdin });
-      input.on("line", (line) => {
-        if (line.trim() === "open") openBrowser(app.issueLaunchUrl());
-        if (line.trim() === "link")
-          process.stdout.write(app.issueLaunchUrl() + "\n");
-      });
-    } else if (!options.open && !options.printLaunchUrl)
-      process.stderr.write(
-        "Use --print-launch-url to connect a browser when automatic opening is disabled.\n",
-      );
-    for (const signal of ["SIGINT", "SIGTERM"])
-      process.once(signal, () => {
-        void app.close().then(() => process.exit(0));
-      });
-  });
+webOptions(
+  program
+    .command("serve")
+    .description("Open the local environment matrix")
+    .option("--schema <path...>", "Schema paths available in this session", [
+      ".env.schema",
+    ]),
+).action(async (options) => {
+  await serve({ ...options, schemas: options.schema });
+});
 program
   .command("init")
   .description("Create a schema with all project settings")

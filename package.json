@@ -9,7 +9,8 @@
     "apps/*"
   ],
   "bin": {
-    "better-env-vault": "bin/better-env-vault.mjs"
+    "better-env-vault": "bin/better-env-vault.mjs",
+    "envault": "bin/envault.mjs"
   },
   "scripts": {
     "dev": "tsx packages/cli/src/index.ts",
@@ -20,7 +21,7 @@
     "format": "prettier --write packages apps scripts tests docs README.md package.json tsconfig*.json vitest.config.ts .github/workflows/ci.yml",
     "format:check": "prettier --check packages apps scripts tests docs README.md package.json tsconfig*.json vitest.config.ts .github/workflows/ci.yml",
     "test:cleanup": "tsc && node dist/scripts/cleanup-local.js",
-    "start": "node bin/better-env-vault.mjs serve",
+    "start": "node bin/envault.mjs",
     "test:ui": "tsx scripts/test-ui.ts",
     "test:matrix": "tsx scripts/test-matrix.ts"
   },

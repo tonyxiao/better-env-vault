@@ -26,8 +26,13 @@ Requires Node.js 22+ and 1Password desktop SDK integration or a service account.
 npm ci
 npm run build
 npm link
-better-env-vault --help
+envault /path/to/.env.schema
 ```
+
+Run `envault` without a path to use `.env.schema` in the current directory.
+The CLI opens your browser and keeps the server in the foreground; Ctrl+C or
+stopping the CLI stops the server. The `better-env-vault` commands remain
+available for exporting values and other operations.
 
 Run `npm test` for the isolated test suite. Live testing uses dedicated disposable
 vaults and runs only through the explicit `npm run test:local` command.

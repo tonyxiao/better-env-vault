@@ -185,11 +185,17 @@ changed values.
 ## Local matrix and editing
 
 ```bash
-better-env-vault serve
+envault /path/to/.env.schema
+envault # uses .env.schema in the current directory
+
+# Open multiple projects in one session:
 better-env-vault serve --schema ./project-a/.env.schema ./project-b/.env.schema
 ```
 
-`serve` binds to loopback and opens a one-time browser launch link. The browser
+`envault` binds to loopback and opens a one-time browser launch link. The
+server runs inside the CLI process: Ctrl+C, SIGTERM, or closing its terminal
+stops the server and closes its active connections. No background daemon is
+started. Use `--port 4187` to choose a port; otherwise an available port is used. The browser
 clears the link's fragment immediately, exchanges it for an HttpOnly session
 cookie, and keeps the mutation token in memory. Each new browser needs its own
 one-time link. In the running server's terminal, type `link` to obtain a fresh
@@ -197,7 +203,7 @@ link or `open` to open your default browser. Links expire after five minutes;
 issuing another does not disconnect existing browsers. For manual launch:
 
 ```bash
-better-env-vault serve --schema ./path/to/.env.schema --no-open --print-launch-url
+envault ./path/to/.env.schema --no-open --print-launch-url
 ```
 
 Copy the one-time link into the browser you want to connect. Opening the plain
