@@ -340,7 +340,7 @@ export function MatrixGrid(props: Props) {
         {active?.status === "error" ? (
           <Button
             size="icon-xs"
-            variant="outline"
+            variant="ghost"
             className="cell-retry"
             aria-label={`Retry saving ${row.name} in ${environment}`}
             title={`${active.error} — Retry save`}
@@ -385,6 +385,10 @@ export function MatrixGrid(props: Props) {
       name: environment === "schema" ? "Schema default" : environment,
       minWidth: 220,
       resizable: true,
+      cellClass: (row: GridRow) => {
+        const variable = row.cells[environment];
+        return `environment-value-cell ${environment === "schema" ? "" : !variable.valid ? "invalid-cell" : variable.state === "explicit" ? "explicit-cell" : ""}`;
+      },
       editable: (row: GridRow) => editable(row, environment),
       editorOptions: {
         commitOnOutsideClick: false,

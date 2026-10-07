@@ -180,13 +180,7 @@ main {
   @apply border-b border-l px-3 py-3 align-middle;
 }
 .value-cell {
-  @apply h-auto min-h-16 w-full flex-col items-start justify-start gap-2 border border-transparent p-2.5 pr-9 text-left font-normal whitespace-normal;
-}
-.value-cell.explicit {
-  @apply border-emerald-200/70 bg-emerald-50/50;
-}
-.value-cell.invalid {
-  @apply border-amber-200 bg-amber-50;
+  @apply h-auto min-h-16 w-full flex-col items-start justify-start gap-2 p-2.5 pr-9 text-left font-normal whitespace-normal;
 }
 .value {
   @apply line-clamp-2 font-mono text-xs whitespace-pre-wrap;
@@ -433,9 +427,22 @@ main {
 .environment-grid .value-cell {
   min-height: 48px;
   height: 48px;
-  padding: 5px 32px 5px 8px;
+  padding: 5px 32px 5px 6px;
   gap: 2px;
-  border-radius: 4px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+}
+.environment-grid .value-cell:hover {
+  background: transparent;
+}
+.environment-grid .explicit-cell {
+  background-color: oklch(0.979 0.014 155);
+}
+.environment-grid .invalid-cell {
+  background-color: oklch(0.987 0.022 95);
 }
 .environment-grid .value {
   display: block;
@@ -507,16 +514,16 @@ main {
   min-height: 30px;
   padding: 5px 6px;
   resize: none;
-  border-radius: 3px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  outline: none;
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 12px;
   line-height: 18px;
   white-space: pre;
   overflow: auto;
   box-shadow: none !important;
-}
-.spreadsheet-input:focus-visible {
-  border-color: var(--ring);
 }
 .spreadsheet-caption {
   display: block;
