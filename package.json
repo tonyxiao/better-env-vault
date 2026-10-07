@@ -24,7 +24,8 @@
     "start": "node bin/envault.mjs",
     "test:ui": "tsx scripts/test-ui.ts",
     "test:matrix": "tsx scripts/test-matrix.ts",
-    "test:grid": "tsx scripts/test-grid.ts"
+    "test:grid": "tsx scripts/test-grid.ts",
+    "test:bulk-ui": "tsx scripts/test-bulk-ui.ts"
   },
   "engines": {
     "node": ">=22"

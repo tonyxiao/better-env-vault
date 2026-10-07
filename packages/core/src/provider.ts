@@ -23,7 +23,13 @@ export interface VaultItem {
   notes: string;
   raw?: Item;
 }
+export interface VaultInfo {
+  id: string;
+  name: string;
+}
+
 export interface Provider {
+  listVaults?(): Promise<VaultInfo[]>;
   readVault(vaultId: string): Promise<VaultItem[]>;
   save(
     vaultId: string,
@@ -120,6 +126,12 @@ export class OnePasswordProvider implements Provider {
             502,
           );
     }
+  }
+  async listVaults(): Promise<VaultInfo[]> {
+    const vaults = await this.call(() => this.client.vaults.list());
+    return vaults
+      .filter((vault) => this.allowed.has(vault.id))
+      .map((vault) => ({ id: vault.id, name: vault.title }));
   }
   private check(vaultId: string) {
     if (!this.allowed.has(vaultId))

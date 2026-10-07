@@ -74,7 +74,7 @@ try {
     exact: true,
   });
   await grid.getByText("Inherits dev", { exact: true }).first().waitFor();
-  assert.equal(await grid.getAttribute("aria-colcount"), "5");
+  assert.equal(await grid.getAttribute("aria-colcount"), "6");
   const reveal = page.getByRole("button", {
     name: "Reveal all values",
     exact: true,
@@ -151,7 +151,7 @@ try {
   );
   assert.ok(
     await page
-      .getByRole("combobox", { name: "Project", exact: true })
+      .getByRole("combobox", { name: "Schema", exact: true })
       .isEnabled(),
   );
   assert.ok(
@@ -379,7 +379,7 @@ try {
     .getByRole("status", { name: "Saving TOKEN in prod", exact: true })
     .waitFor();
   await page
-    .getByRole("combobox", { name: "Project", exact: true })
+    .getByRole("combobox", { name: "Schema", exact: true })
     .selectOption("1");
   await grid
     .getByText("Inherits schema default", { exact: true })
@@ -407,7 +407,7 @@ try {
   await page.keyboard.press("Escape");
   await page.setViewportSize({ width: 800, height: 900 });
   const variableCell = grid
-    .locator('[role="gridcell"][aria-colindex="1"]')
+    .locator('[role="gridcell"][aria-colindex="2"]')
     .first();
   const before = (await variableCell.boundingBox())!.x;
   await grid.evaluate((element) => {
@@ -437,7 +437,7 @@ try {
   await mkdir(".local", { recursive: true });
   await page.setViewportSize({ width: 1280, height: 900 });
   await page
-    .getByRole("combobox", { name: "Project", exact: true })
+    .getByRole("combobox", { name: "Schema", exact: true })
     .selectOption("0");
   await grid.getByText("Inherits dev", { exact: true }).first().waitFor();
   await edit("LABEL", "dev");

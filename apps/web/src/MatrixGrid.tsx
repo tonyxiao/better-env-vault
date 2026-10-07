@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import {
   DataGrid,
+  SelectColumn,
   type Column,
   type DataGridHandle,
   type RenderEditCellProps,
@@ -8,6 +9,11 @@ import {
 import "react-data-grid/lib/styles.css";
 import { Info, LoaderCircle, RotateCcw } from "lucide-react";
 import { Button } from "./components/ui/button.js";
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from "./components/ui/tooltip.js";
 import {
   SpreadsheetEditor,
   originLabel,
@@ -42,6 +48,9 @@ interface Props {
   hideEpoch: number;
   resetEpoch: number;
   operations: Record<string, SaveOperation>;
+  selectedRows: ReadonlySet<string>;
+  onSelectedRowsChange: (selected: Set<string>) => void;
+  deleting: ReadonlySet<string>;
   onSave: (payload: Record<string, unknown>) => Promise<boolean>;
   onReveal: (
     environment: string,
@@ -157,6 +166,9 @@ export function MatrixGrid(props: Props) {
     hideEpoch,
     resetEpoch,
     operations,
+    selectedRows,
+    onSelectedRowsChange,
+    deleting,
     onSave,
     onReveal,
     onDetails,
@@ -204,6 +216,7 @@ export function MatrixGrid(props: Props) {
   function editable(row: GridRow, environment: string) {
     return (
       !busy &&
+      !deleting.has(row.name) &&
       operation(row.name, environment)?.status !== "saving" &&
       operation(row.name, "definition")?.status !== "saving" &&
       (environment !== "schema" ||
@@ -211,7 +224,7 @@ export function MatrixGrid(props: Props) {
     );
   }
   function navigate(rowIdx: number, idx: number, direction: EditDirection) {
-    const keys = ["variable", "schema", ...matrix.environments];
+    const keys = ["select", "variable", "schema", ...matrix.environments];
     let nextRow = rowIdx,
       nextIdx = idx;
     for (let step = 0; step < rows.length * keys.length; step++) {
@@ -220,10 +233,10 @@ export function MatrixGrid(props: Props) {
       else {
         nextIdx += direction === "previous" ? -1 : 1;
         if (nextIdx >= keys.length) {
-          nextIdx = 1;
+          nextIdx = 2;
           nextRow++;
         }
-        if (nextIdx < 1) {
+        if (nextIdx < 2) {
           nextIdx = keys.length - 1;
           nextRow--;
         }
@@ -323,7 +336,7 @@ export function MatrixGrid(props: Props) {
             className="cell-details"
             aria-label={`Details for ${row.name} in ${environment}`}
             title="Value details and advanced editing"
-            disabled={busy}
+            disabled={busy || deleting.has(row.name)}
             onClick={(event) => {
               event.stopPropagation();
               grid.current?.setActivePosition({ rowIdx, idx });
@@ -353,6 +366,7 @@ export function MatrixGrid(props: Props) {
     );
   }
   const columns: Column<GridRow>[] = [
+    { ...SelectColumn, width: 36, minWidth: 36, frozen: freezeVariables },
     {
       key: "variable",
       name: "Variable",
@@ -371,6 +385,19 @@ export function MatrixGrid(props: Props) {
           title={row.definition.description || row.name}
         >
           <code title={row.name}>{row.name}</code>
+          {deleting.has(row.name) ? (
+            <span
+              className="row-deleting"
+              role="status"
+              aria-label={`Deleting ${row.name}`}
+            >
+              <LoaderCircle
+                className="size-3 animate-spin"
+                aria-hidden="true"
+              />{" "}
+              Deleting…
+            </span>
+          ) : null}
           <p>{row.definition.description || "No description"}</p>
           <div className="badges">
             <span>{row.definition.type}</span>
@@ -394,21 +421,53 @@ export function MatrixGrid(props: Props) {
         commitOnOutsideClick: false,
         closeOnExternalRowChange: false,
       },
-      renderHeaderCell: () => (
-        <div>
-          <span className="column-label">
-            {environment === "schema"
-              ? "Base layer"
-              : matrix.config.environments[environment].extends
-                ? `Inherits ${matrix.config.environments[environment].extends}`
-                : "Inherits schema default"}
-          </span>
-          <strong>
-            {environment === "schema" ? "Schema default" : environment}
-          </strong>
-          {environment !== "schema" ? <span className="env-dot" /> : null}
-        </div>
-      ),
+      renderHeaderCell: () => {
+        const vault = matrix.vaults?.[environment];
+        const id = vault?.id ?? matrix.config.environments[environment]?.vault;
+        const description =
+          environment === "schema"
+            ? "Base layer"
+            : matrix.config.environments[environment].extends
+              ? `Inherits ${matrix.config.environments[environment].extends}`
+              : "Inherits schema default";
+        return (
+          <div>
+            <span className="column-label">{description}</span>
+            <div className="environment-heading">
+              <strong
+                title={
+                  environment === "schema"
+                    ? "Defaults declared in .env.schema"
+                    : `${vault?.name ?? "Vault name unavailable"} (${id})`
+                }
+              >
+                {environment === "schema" ? "Schema default" : environment}
+              </strong>
+              {environment !== "schema" ? (
+                <Tooltip disableHoverableContent>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      className="vault-info"
+                      aria-label={`Vault info for ${environment}`}
+                      title={`${vault?.name ?? "Vault name unavailable"} (${id})`}
+                    >
+                      <Info aria-hidden="true" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent className="vault-tooltip">
+                    <strong>{vault?.name ?? "Vault name unavailable"}</strong>
+                    <span>1Password vault</span>
+                    <code>{id}</code>
+                  </TooltipContent>
+                </Tooltip>
+              ) : null}
+            </div>
+          </div>
+        );
+      },
       renderCell: ({
         row,
         rowIdx,
@@ -451,6 +510,9 @@ export function MatrixGrid(props: Props) {
       columns={columns}
       rows={rows}
       rowKeyGetter={(row) => row.name}
+      selectedRows={selectedRows}
+      onSelectedRowsChange={onSelectedRowsChange}
+      isRowSelectionDisabled={(row) => busy || deleting.has(row.name)}
       headerRowHeight={56}
       rowHeight={rowHeight}
       style={{ height: Math.max(184, height) }}
@@ -475,7 +537,8 @@ export function MatrixGrid(props: Props) {
           (event.key === "Enter" || event.key === "F2") &&
           args.row &&
           args.column &&
-          args.column.key !== "variable"
+          args.column.key !== "variable" &&
+          args.column.key !== SelectColumn.key
         ) {
           event.preventDefault();
           event.preventGridDefault();

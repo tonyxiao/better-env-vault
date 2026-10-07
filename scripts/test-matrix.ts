@@ -3,7 +3,9 @@ import { mkdir } from "node:fs/promises";
 import { chromium } from "playwright-core";
 import { fixture, MemoryProvider, config } from "../tests/helpers.js";
 import { startServer } from "../apps/web/src/server.js";
-const schema = await fixture("# @optional\nTOKEN=\n\n# @public\nLABEL=base\n");
+const schema = await fixture(
+  "# @optional\nTOKEN=\n\n# @public\nLABEL=base\n\n# @public\nKEEP=untouched\n",
+);
 const provider = new MemoryProvider();
 await provider.save(
   config.environments.dev.vault,
@@ -350,6 +352,104 @@ try {
   await page.screenshot({ path: ".local/shadcn-mobile.png", fullPage: false });
   await page.keyboard.press("Escape");
   await dialog.waitFor({ state: "hidden" });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const grid = page.getByRole("grid", {
+    name: "Environment values",
+    exact: true,
+  });
+  assert.equal(
+    await page.getByRole("combobox", { name: "Schema", exact: true }).count(),
+    0,
+    "A single schema must not show a redundant chooser.",
+  );
+  await page
+    .getByRole("button", { name: "Vault info for dev", exact: true })
+    .hover();
+  const tooltip = page.getByRole("tooltip");
+  await tooltip.waitFor();
+  assert.ok((await tooltip.textContent())!.includes("Fixture vault aaaaaa"));
+  assert.ok(
+    (await tooltip.textContent())!.includes(config.environments.dev.vault),
+  );
+  await page.mouse.move(0, 0);
+  const gridBeforeSelection = await grid.boundingBox();
+  await grid
+    .locator('[role="row"][aria-rowindex="2"]')
+    .getByRole("checkbox", { name: "Select", exact: true })
+    .check();
+  await grid
+    .locator('[role="row"][aria-rowindex="3"]')
+    .getByRole("checkbox", { name: "Select", exact: true })
+    .click({ modifiers: ["Shift"] });
+  const actions = page.getByRole("toolbar", {
+    name: "Selected variables actions",
+    exact: true,
+  });
+  await actions.getByText("2 selected", { exact: true }).waitFor();
+  assert.equal(
+    (await grid.boundingBox())!.y,
+    gridBeforeSelection!.y,
+    "Selecting rows must not shift the grid.",
+  );
+  await actions
+    .getByRole("button", { name: "Delete selected", exact: true })
+    .click();
+  await dialog
+    .getByRole("textbox", { name: "Type DELETE to confirm", exact: true })
+    .waitFor();
+  assert.ok(
+    await dialog
+      .getByRole("button", { name: "Delete variables", exact: true })
+      .isDisabled(),
+  );
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  assert.equal(
+    (await provider.readVault(config.environments.prod.vault)).some(
+      (item) => item.name === "TOKEN",
+    ),
+    true,
+  );
+  let releaseDeletion!: () => void;
+  const delayedDeletion = new Promise<void>((resolve) => {
+    releaseDeletion = resolve;
+  });
+  await page.route("**/api/delete-many*", async (route) => {
+    await delayedDeletion;
+    await route.continue();
+  });
+  await actions
+    .getByRole("button", { name: "Delete selected", exact: true })
+    .click();
+  await dialog
+    .getByRole("textbox", { name: "Type DELETE to confirm", exact: true })
+    .fill("DELETE");
+  await dialog
+    .getByRole("button", { name: "Delete variables", exact: true })
+    .click();
+  await page
+    .getByRole("status", { name: "Deleting TOKEN", exact: true })
+    .waitFor();
+  assert.ok(
+    await page
+      .getByRole("textbox", { name: "Search variables", exact: true })
+      .isEnabled(),
+  );
+  releaseDeletion();
+  await page
+    .getByRole("status")
+    .filter({ hasText: "Deleted 2 variables" })
+    .waitFor();
+  assert.equal(await actions.count(), 0);
+  assert.ok(
+    !Object.values(provider.vaults)
+      .flat()
+      .some((item) => ["TOKEN", "LABEL"].includes(item.name)),
+  );
+  assert.ok(
+    await page
+      .getByRole("button", { name: "Edit KEEP in dev", exact: true })
+      .isEnabled(),
+  );
   assert.deepEqual(
     browserErrors,
     [],

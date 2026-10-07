@@ -240,6 +240,17 @@ Copy the one-time link into the browser you want to connect. Opening the plain
 address does not authenticate a new browser. The app validates Host and Origin,
 requires a session for all API reads, and sends no-store responses.
 
+Each loaded `.env.schema` is a separate schema/workspace. With one schema, the
+header shows its display name and file path directly. A **Schema** chooser only
+appears when multiple files are loaded; it switches files, not environments.
+Environments are the grid columns. **Schema settings** edits that file's
+`@vaultConfig` header.
+
+Each environment header has a **Vault info** icon. Hover or focus it to see the
+exact 1Password vault name and full vault ID. Names come from the authenticated
+1Password API and refresh along with the matrix; they are not inferred from
+environment labels. The schema-default column has no vault.
+
 The matrix shows schema defaults, explicit overrides, inherited values, and
 missing/invalid values. Search by name or description and filter missing,
 invalid, or overridden values. Sensitive cells use a fixed mask. **Reveal
@@ -278,6 +289,20 @@ inherited cell creates an override in the selected environment; **Edit source
 environment** deliberately targets the ancestor instead. **Remove override**
 restores inheritance.
 
+To remove entire variables, select their row checkboxes and choose **Delete
+selected** in the action bar below the grid. Shift-click selects a range; the
+header checkbox selects visible/filtered rows. Review the selected names and
+type `DELETE` once to confirm. This removes both schema definitions and their
+items from every configured vault. It does not delete the vaults themselves.
+**Clear selection** clears the action bar. The existing details editor's
+**Delete everywhere** action is also available for a single variable.
+
+Bulk deletion checks every selected item's version before removing anything,
+uses the same per-schema write queue as other edits, and rejects deletions that
+would break remaining expression references. On failure it attempts to restore
+removed items before reporting the error. A partial rollback is reported for
+manual recovery. Up to 200 variables can be deleted in one confirmed batch.
+
 The editor also supports public schema defaults, descriptions, types, required
 and sensitive status, renaming across vaults, and confirmed deletion everywhere.
 **Add variable** creates a definition and an initial value in the selected
@@ -287,7 +312,7 @@ You can update an override's notes without revealing or replacing its value.
 To deliberately clear a value, select **Set an explicit empty value**; use
 **Remove override** to restore inheritance instead.
 **Adopt into schema** registers unmanaged items without copying their values.
-**Project settings** edits `@vaultConfig` in the schema header.
+**Schema settings** edits `@vaultConfig` in the schema header.
 
 The UI uses React Data Grid for the matrix and shadcn/ui components, Radix
 primitives, Tailwind CSS, and Lucide icons for its controls.
@@ -364,6 +389,12 @@ requires local Chrome and never accesses 1Password.
 spinners, concurrent edits, draft preservation, masking during saves, keyboard
 navigation, failed-value recovery, and project isolation. It also uses a memory
 provider and never contacts 1Password.
+
+`npm run test:bulk-ui -- --schema ./path/to/.env.schema` explicitly verifies
+selection, vault metadata tooltips, and confirmed bulk deletion against live
+1Password using two uniquely named, non-secret fixtures. It removes the fixtures
+and checks that original item versions are unchanged. If interrupted, recovery
+names remain in `.local/bulk-ui-recovery.json`.
 
 The normal test suite uses a memory provider and never mutates live vaults.
 To explicitly test the local desktop SDK with dedicated disposable vaults:

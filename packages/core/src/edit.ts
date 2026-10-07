@@ -268,17 +268,137 @@ export async function applyEdit(
 ) {
   const parsed = editRequest.safeParse(rawRequest);
   if (!parsed.success) throw new VaultError("Invalid edit request.");
-  const request = parsed.data;
+  return serializeEdit(schemaPath, () =>
+    performEdit(schemaPath, provider, parsed.data),
+  );
+}
+
+async function serializeEdit<T>(
+  schemaPath: string,
+  operation: () => Promise<T>,
+): Promise<T> {
   const previous = queues.get(schemaPath) ?? Promise.resolve();
-  const work = previous
-    .catch(() => {})
-    .then(() => performEdit(schemaPath, provider, request));
+  const work = previous.catch(() => {}).then(operation);
   queues.set(schemaPath, work);
   try {
     return await work;
   } finally {
     if (queues.get(schemaPath) === work) queues.delete(schemaPath);
   }
+}
+
+export const bulkDeleteRequest = z.strictObject({
+  fingerprint: z.string(),
+  names: z
+    .array(name)
+    .min(1)
+    .max(200)
+    .refine((names) => new Set(names).size === names.length),
+  confirmation: z.literal("DELETE"),
+  versions: z.record(name, z.record(z.string(), z.number().int().nullable())),
+});
+
+export async function applyDeleteMany(
+  schemaPath: string,
+  provider: Provider,
+  raw: unknown,
+) {
+  const parsed = bulkDeleteRequest.safeParse(raw);
+  if (!parsed.success)
+    throw new VaultError(
+      "Select unique variables and type DELETE to confirm deletion.",
+    );
+  return serializeEdit(schemaPath, async () => {
+    const request = parsed.data;
+    const schema = await loadSchema(schemaPath);
+    if (schema.fingerprint !== request.fingerprint) conflict();
+    const declared = new Set(schema.parsed.configItems.map((item) => item.key));
+    if (request.names.some((name) => !declared.has(name)))
+      throw new VaultError(
+        "Only declared variables can be deleted. Refresh the schema.",
+      );
+    const snapshot = await readVaults(schema, provider);
+    for (const name of request.names) {
+      const versions = request.versions[name];
+      if (!versions)
+        throw new VaultError(
+          "Supply item versions for every selected variable.",
+        );
+      checkVersions(schema, snapshot, {
+        action: "delete",
+        name,
+        versions,
+        fingerprint: request.fingerprint,
+        confirmation: name,
+      });
+    }
+    let proposed = schema;
+    for (const name of request.names) {
+      const text = editSchemaText(proposed, {
+        action: "delete",
+        name,
+        fingerprint: request.fingerprint,
+        versions: request.versions[name],
+        confirmation: name,
+      });
+      proposed = { ...proposed, text, ...parseSchema(text) };
+    }
+    const selected = new Set(request.names);
+    const simulated = Object.fromEntries(
+      Object.entries(snapshot).map(([environment, items]) => [
+        environment,
+        items.filter((item) => !selected.has(item.name)),
+      ]),
+    );
+    for (const environment of Object.keys(schema.config.environments)) {
+      const result = await resolveEnvironment(proposed, environment, simulated);
+      if (
+        result.variables.some((variable) =>
+          variable.errors.some((error) => error.startsWith("SchemaError")),
+        )
+      )
+        throw new VaultError(
+          "Deletion would break remaining schema definitions. Update references or select the dependent variables too.",
+        );
+    }
+    const removed: { environment: string; item: VaultItem }[] = [];
+    try {
+      for (const [environment, items] of Object.entries(snapshot)) {
+        for (const item of items) {
+          if (!selected.has(item.name)) continue;
+          await assertUnchanged(schema);
+          await provider.remove(
+            schema.config.environments[environment].vault,
+            item,
+          );
+          removed.push({ environment, item });
+        }
+      }
+      await writeSchema(schema, proposed.text);
+      return { saved: true, deleted: request.names };
+    } catch (error) {
+      const failures: string[] = [];
+      for (const { environment, item } of removed.reverse()) {
+        try {
+          const vault = schema.config.environments[environment].vault;
+          if (provider.restore) await provider.restore(vault, item);
+          else await provider.save(vault, item.name, item.value, item.notes);
+        } catch {
+          failures.push(`${environment}:${item.id}`);
+        }
+      }
+      if (
+        failures.length ||
+        (error instanceof VaultError && error.code === "partial")
+      )
+        throw new VaultError(
+          `Partial deletion. Refresh and inspect affected items in 1Password before retrying: ${failures.join(", ") || "the selected variables"}.`,
+          "partial",
+          502,
+        );
+      throw error;
+    }
+  });
 }
 
 async function performEdit(

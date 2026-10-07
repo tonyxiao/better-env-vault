@@ -605,3 +605,86 @@ main {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+.schema-identity > span {
+  display: block;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+.schema-identity > strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+.environment-heading {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.vault-info {
+  color: var(--muted-foreground);
+}
+.vault-tooltip {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-width: 360px;
+}
+.vault-tooltip code {
+  font-size: 11px;
+  user-select: text;
+}
+.matrix-footer {
+  min-height: 48px;
+}
+.selection-action-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+.selection-action-bar > strong {
+  font-weight: 600;
+  color: var(--foreground);
+}
+.selection-action-bar > button:last-child {
+  margin-left: auto;
+}
+.delete-variable-list {
+  max-height: 260px;
+  overflow: auto;
+  margin: 12px 0 24px;
+  padding: 12px;
+  border-radius: 6px;
+  background: var(--muted);
+}
+.delete-variable-list li {
+  margin: 4px 0;
+  font-size: 12px;
+}
+.row-deleting {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+
+.matrix-footer {
+  height: 48px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+@media (max-width: 760px) {
+  .matrix-footer {
+    height: 72px;
+    min-height: 72px;
+  }
+  .selection-action-bar {
+    gap: 6px;
+  }
+  .selection-action-bar > button {
+    font-size: 12px;
+    padding-inline: 6px;
+  }
+}

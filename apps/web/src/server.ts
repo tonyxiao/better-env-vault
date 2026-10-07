@@ -17,7 +17,7 @@ import {
   readVaults,
   resolveEnvironment,
 } from "../../../packages/core/src/resolver.js";
-import { applyEdit } from "../../../packages/core/src/edit.js";
+import { applyEdit, applyDeleteMany } from "../../../packages/core/src/edit.js";
 import { safeError, VaultError } from "../../../packages/core/src/errors.js";
 import { SnapshotCache } from "./snapshot-cache.js";
 import type {
@@ -74,6 +74,7 @@ export async function startServer(options: {
   const snapshots = new SnapshotCache<{
     snapshot: VaultSnapshot;
     resolutions: Resolution[];
+    vaults: Record<string, { id: string; name?: string }>;
   }>();
   const bootstrap = randomBytes(32).toString("hex");
   const credential = randomBytes(32).toString("hex");
@@ -219,13 +220,28 @@ export async function startServer(options: {
             project.id,
             schema.fingerprint,
             async () => {
-              const snapshot = await readVaults(schema, provider);
+              const [snapshot, metadata] = await Promise.all([
+                readVaults(schema, provider),
+                provider.listVaults?.() ?? Promise.resolve([]),
+              ]);
+              const vaults = Object.fromEntries(
+                Object.entries(schema.config.environments).map(
+                  ([environment, config]) => [
+                    environment,
+                    {
+                      id: config.vault,
+                      name: metadata.find((vault) => vault.id === config.vault)
+                        ?.name,
+                    },
+                  ],
+                ),
+              );
               const resolutions = await Promise.all(
                 Object.keys(schema.config.environments).map((environment) =>
                   resolveEnvironment(schema, environment, snapshot),
                 ),
               );
-              return { snapshot, resolutions };
+              return { snapshot, resolutions, vaults };
             },
             url.searchParams.get("fresh") === "1",
           );
@@ -244,11 +260,12 @@ export async function startServer(options: {
                 409,
               );
           }
-          const { snapshot, resolutions } = await readSnapshot();
+          const { snapshot, resolutions, vaults } = await readSnapshot();
           const environments = Object.keys(schema.config.environments);
           json(response, 200, {
             fingerprint: schema.fingerprint,
             config: schema.config,
+            vaults,
             schemaPath: schema.path,
             environments,
             resolutions: revealAll
@@ -329,6 +346,18 @@ export async function startServer(options: {
             editableValue: sourceItem?.value ?? record.value,
             notes: explicit?.notes ?? "",
           });
+          return;
+        }
+        if (url.pathname === "/api/delete-many" && request.method === "POST") {
+          try {
+            json(
+              response,
+              200,
+              await applyDeleteMany(schema.path, provider, await body(request)),
+            );
+          } finally {
+            snapshots.invalidate(project.id);
+          }
           return;
         }
         if (url.pathname === "/api/edit" && request.method === "POST") {

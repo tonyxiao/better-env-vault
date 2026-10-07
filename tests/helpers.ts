@@ -36,6 +36,12 @@ export class MemoryProvider implements Provider {
   calls = 0;
   failAt?: number;
   private nextId = 0;
+  async listVaults() {
+    return Object.keys(this.vaults).map((id) => ({
+      id,
+      name: `Fixture vault ${id.slice(0, 6)}`,
+    }));
+  }
   async readVault(vault: string) {
     return structuredClone(this.vaults[vault] ?? []);
   }

@@ -15,7 +15,7 @@ import {
   TooltipContent,
   TooltipProvider,
 } from "./components/ui/tooltip.js";
-import { LoaderCircle, Plus, RefreshCw, X } from "lucide-react";
+import { LoaderCircle, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { Button } from "./components/ui/button.js";
 import { Input } from "./components/ui/input.js";
 import { Textarea } from "./components/ui/textarea.js";
@@ -88,8 +88,13 @@ function App() {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
   const [cell, setCell] = useState<Cell>();
-  const [modal, setModal] = useState<"add" | "settings">();
+  const [modal, setModal] = useState<"add" | "settings" | "delete">();
   const [addName, setAddName] = useState("");
+  const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
+  const [deletions, setDeletions] = useState<
+    Record<string, ReadonlySet<string>>
+  >({});
+  const pendingDeletes = useRef(new Set<string>());
   const [gridResetEpoch, setGridResetEpoch] = useState(0);
   const [operations, setOperations] = useState<Record<string, SaveOperation>>(
     {},
@@ -116,6 +121,7 @@ function App() {
     setError("");
     setNotice("");
     setOperations({});
+    setSelectedRows(new Set());
     setGridResetEpoch((epoch) => epoch + 1);
     setRevealedMatrix(undefined);
     setAllVisible(false);
@@ -239,6 +245,7 @@ function App() {
     setMatrix(undefined);
     setCell(undefined);
     setModal(undefined);
+    setSelectedRows(new Set());
     setGridResetEpoch((epoch) => epoch + 1);
     setRevealedMatrix(undefined);
     setAllVisible(false);
@@ -313,6 +320,63 @@ function App() {
       return false;
     } finally {
       pending.current.delete(key);
+    }
+  }
+  useEffect(() => {
+    if (!matrix) return;
+    const declared = new Set(
+      matrix.resolutions[0]?.variables.map((variable) => variable.name),
+    );
+    setSelectedRows((previous) => {
+      const next = new Set([...previous].filter((name) => declared.has(name)));
+      return next.size === previous.size ? previous : next;
+    });
+  }, [matrix]);
+
+  async function deleteVariables(payload: {
+    names: string[];
+    fingerprint: string;
+    confirmation: string;
+    versions: Record<string, Record<string, number | null>>;
+  }) {
+    const target = project;
+    if (pendingDeletes.current.has(target)) return;
+    pendingDeletes.current.add(target);
+    setDeletions((previous) => ({
+      ...previous,
+      [target]: new Set(payload.names),
+    }));
+    setModal(undefined);
+    setNotice("");
+    setError("");
+    try {
+      await request(`/api/delete-many?project=${encodeURIComponent(target)}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Bev-Mutation": token.current,
+        },
+        body: JSON.stringify(payload),
+      });
+      if (projectRef.current === target) {
+        setSelectedRows(new Set());
+        await refresh(false, true);
+        if (projectRef.current === target)
+          setNotice(
+            `Deleted ${payload.names.length} variable${payload.names.length === 1 ? "" : "s"} from the schema and configured vaults.`,
+          );
+      }
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "session") disconnect();
+      else if (projectRef.current === target)
+        setError((error as Error).message);
+    } finally {
+      pendingDeletes.current.delete(target);
+      setDeletions((previous) => {
+        const next = { ...previous };
+        delete next[target];
+        return next;
+      });
     }
   }
   async function reveal(environment: string, name: string) {
@@ -496,27 +560,41 @@ function App() {
           </div>
         ) : null}
         <section className="workspace-bar" aria-label="Project">
-          <div>
-            <label htmlFor="project">Project</label>
-            <NativeSelect
-              id="project"
-              disabled={busy}
-              value={project}
-              onChange={(e) => {
-                close();
-                setNotice("");
-                setProject(e.target.value);
-              }}
-            >
-              {projects.map((p) => (
-                <NativeSelectOption value={p.id} key={p.id}>
-                  {p.name}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
+          <div className="schema-identity">
+            {projects.length > 1 ? (
+              <>
+                <label htmlFor="project">Schema</label>
+                <NativeSelect
+                  id="project"
+                  aria-label="Schema"
+                  disabled={busy}
+                  value={project}
+                  onChange={(event) => {
+                    close();
+                    setNotice("");
+                    setProject(event.target.value);
+                  }}
+                >
+                  {projects.map((schema) => (
+                    <NativeSelectOption value={schema.id} key={schema.id}>
+                      {schema.name}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+              </>
+            ) : (
+              <>
+                <span>Schema</span>
+                <strong>
+                  {matrix?.config.name ??
+                    projects.find((schema) => schema.id === project)?.name ??
+                    ".env.schema"}
+                </strong>
+              </>
+            )}
           </div>
           <div className="schema-path">
-            <span>Source of truth</span>
+            <span>Schema file</span>
             <code>
               {matrix?.schemaPath ??
                 projects.find((p) => p.id === project)?.schemaPath ??
@@ -528,7 +606,7 @@ function App() {
             disabled={!matrix || busy}
             onClick={() => setModal("settings")}
           >
-            Project settings
+            Schema settings
           </Button>
         </section>
         <div className="toolbar">
@@ -661,26 +739,71 @@ function App() {
               hideEpoch={hideEpoch}
               resetEpoch={gridResetEpoch}
               operations={operations}
+              selectedRows={selectedRows}
+              onSelectedRowsChange={setSelectedRows}
+              deleting={deletions[project] ?? new Set<string>()}
               onSave={mutate}
               onReveal={reveal}
               onDetails={setCell}
             />
             <footer className="matrix-footer">
-              <span>
-                <i className="legend-dot" />
-                Explicit override
-              </span>
-              <span>
-                <i className="legend-dot inherited" />
-                Inherited value
-              </span>
-              <span>
-                {allVisible
-                  ? "All matrix values are visible."
-                  : revealingAll
-                    ? "Revealing all values…"
-                    : "Sensitive values stay masked until revealed."}
-              </span>
+              {selectedRows.size ? (
+                <div
+                  className="selection-action-bar"
+                  role="toolbar"
+                  aria-label="Selected variables actions"
+                >
+                  <strong>{selectedRows.size} selected</strong>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSelectedRows(new Set())}
+                  >
+                    Clear selection
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    disabled={
+                      busy ||
+                      !!deletions[project] ||
+                      selectedRows.size > 200 ||
+                      Object.values(operations).some(
+                        (operation) =>
+                          operation.project === project &&
+                          operation.status === "saving",
+                      )
+                    }
+                    title={
+                      selectedRows.size > 200
+                        ? "Select up to 200 variables per batch"
+                        : "Delete selected definitions and their items from every configured vault"
+                    }
+                    onClick={() => setModal("delete")}
+                  >
+                    <Trash2 aria-hidden="true" />
+                    Delete selected
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  <span>
+                    <i className="legend-dot" />
+                    Explicit override
+                  </span>
+                  <span>
+                    <i className="legend-dot inherited" />
+                    Inherited value
+                  </span>
+                  <span>
+                    {allVisible
+                      ? "All matrix values are visible."
+                      : revealingAll
+                        ? "Revealing all values…"
+                        : "Sensitive values stay masked until revealed."}
+                  </span>
+                </>
+              )}
             </footer>
           </section>
         ) : null}
@@ -740,7 +863,7 @@ function App() {
           }}
         />
       ) : null}
-      {modal && matrix ? (
+      {modal && modal !== "delete" && matrix ? (
         <ProjectDialog
           key={`${modal}:${addName}`}
           mode={modal}
@@ -752,7 +875,88 @@ function App() {
           onSave={mutate}
         />
       ) : null}
+      {modal === "delete" && matrix ? (
+        <DeleteVariablesDialog
+          key={project}
+          names={[...selectedRows].sort()}
+          matrix={matrix}
+          onClose={close}
+          onDelete={deleteVariables}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function DeleteVariablesDialog({
+  names,
+  matrix,
+  onClose,
+  onDelete,
+}: {
+  names: string[];
+  matrix: Matrix;
+  onClose: () => void;
+  onDelete: (payload: {
+    names: string[];
+    fingerprint: string;
+    confirmation: string;
+    versions: Record<string, Record<string, number | null>>;
+  }) => Promise<void>;
+}) {
+  const batch = useRef({
+    names,
+    fingerprint: matrix.fingerprint,
+    versions: Object.fromEntries(
+      names.map((name) => [name, matrix.versions[name]]),
+    ),
+  }).current;
+  const [confirmation, setConfirmation] = useState("");
+  return (
+    <Dialog
+      title={`Delete ${batch.names.length} variable${batch.names.length === 1 ? "" : "s"}`}
+      onClose={onClose}
+    >
+      <p className="dialog-intro">
+        This removes the selected definitions from .env.schema and their items
+        from every configured 1Password vault, including overrides.
+      </p>
+      <ul className="delete-variable-list">
+        {batch.names.map((name) => (
+          <li key={name}>
+            <code>{name}</code>
+          </li>
+        ))}
+      </ul>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (confirmation === "DELETE")
+            void onDelete({ ...batch, confirmation });
+        }}
+      >
+        <label>
+          Type DELETE to confirm
+          <Input
+            autoComplete="off"
+            value={confirmation}
+            onChange={(event) => setConfirmation(event.target.value)}
+          />
+        </label>
+        <div className="form-actions">
+          <Button type="button" variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            type="submit"
+            variant="destructive"
+            disabled={confirmation !== "DELETE"}
+          >
+            Delete variables
+          </Button>
+        </div>
+      </form>
+    </Dialog>
   );
 }
 
@@ -1250,7 +1454,7 @@ function ProjectDialog({
           ? initialName
             ? "Adopt variable"
             : "Add variable"
-          : "Project settings"
+          : "Schema settings"
       }
       onClose={onClose}
     >

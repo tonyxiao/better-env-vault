@@ -9,6 +9,7 @@ export interface Matrix {
   config: ProjectConfig;
   schemaPath: string;
   environments: string[];
+  vaults?: Record<string, { id: string; name?: string }>;
   resolutions: Resolution[];
   versions: Record<string, Record<string, number | null>>;
   editableValues?: Record<string, Record<string, string | undefined>>;

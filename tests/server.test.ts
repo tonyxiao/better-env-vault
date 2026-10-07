@@ -456,3 +456,87 @@ it("uses a fresh style nonce for Radix styles without allowing inline scripts", 
     await app.close();
   }
 });
+
+it("exposes only configured vault metadata and protects confirmed bulk deletion", async () => {
+  const schema = await fixture("# @optional\nA=\n\n# @optional\nB=\n");
+  const provider = new MemoryProvider();
+  await provider.save(
+    config.environments.dev.vault,
+    "A",
+    "private-fixture",
+    "",
+  );
+  await provider.save(
+    config.environments.prod.vault,
+    "B",
+    "other-private-fixture",
+    "",
+  );
+  const app = await startServer({ schemas: [schema.path], provider });
+  try {
+    const session = await fetch(app.url + "/api/session", {
+      method: "POST",
+      headers: { Origin: app.url, "Content-Type": "application/json" },
+      body: JSON.stringify({ token: app.bootstrap }),
+    });
+    const cookie = session.headers.get("set-cookie")!.split(";")[0];
+    const projects = await (
+      await fetch(app.url + "/api/projects", { headers: { Cookie: cookie } })
+    ).json();
+    const headers = {
+      Cookie: cookie,
+      Origin: app.url,
+      "Content-Type": "application/json",
+      "X-Bev-Mutation": projects.mutationToken,
+    };
+    const response = await fetch(app.url + "/api/matrix?project=0", {
+      headers,
+    });
+    const text = await response.text();
+    expect(text).not.toContain("private-fixture");
+    const matrix = JSON.parse(text);
+    expect(matrix.vaults.dev).toEqual({
+      id: config.environments.dev.vault,
+      name: "Fixture vault aaaaaa",
+    });
+    expect(Object.keys(matrix.vaults)).toEqual(["dev", "staging", "prod"]);
+    const data = JSON.stringify({
+      fingerprint: matrix.fingerprint,
+      names: ["A", "B"],
+      confirmation: "DELETE",
+      versions: matrix.versions,
+    });
+    expect(
+      (
+        await fetch(app.url + "/api/delete-many?project=0", {
+          method: "POST",
+          headers: {
+            Cookie: cookie,
+            Origin: app.url,
+            "Content-Type": "application/json",
+          },
+          body: data,
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await fetch(app.url + "/api/delete-many?project=0", {
+          method: "POST",
+          headers,
+          body: data,
+        })
+      ).status,
+    ).toBe(200);
+    const after = await (
+      await fetch(app.url + "/api/matrix?project=0", { headers })
+    ).json();
+    expect(
+      after.resolutions.every(
+        (resolution: any) => resolution.variables.length === 0,
+      ),
+    ).toBe(true);
+  } finally {
+    await app.close();
+  }
+});
