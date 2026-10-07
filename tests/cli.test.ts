@@ -100,10 +100,15 @@ function envault(
     stderr += part;
   });
   const closed = once(child, "close");
-  async function ready() {
+  async function ready(requireLaunchUrl = false) {
     for (let attempt = 0; attempt < 100; attempt++) {
       const url = stdout.match(/running at (http:\/\/127\.0\.0\.1:\d+)/)?.[1];
-      if (url) return url;
+      if (
+        url &&
+        (!requireLaunchUrl ||
+          /^http:\/\/[^\n]+#session=[a-f0-9]{64}$/m.test(stdout))
+      )
+        return url;
       if (child.exitCode !== null)
         throw new Error(`CLI exited before starting: ${stderr}`);
       await new Promise((resolve) => setTimeout(resolve, 25));
@@ -120,7 +125,7 @@ it.each(["SIGINT", "SIGTERM", "SIGHUP", "SIGKILL"] as const)(
     const app = envault([schema.path, "--no-open", "--print-launch-url"]);
     let socket: ReturnType<typeof connect> | undefined;
     try {
-      const url = await app.ready();
+      const url = await app.ready(true);
       const launchUrl = app
         .output()
         .stdout.split("\n")
@@ -219,4 +224,17 @@ it("rejects missing schemas and invalid ports before launching the server", asyn
     expect((await app.closed)[0]).toBe(1);
     expect(app.output().stdout).not.toContain("running at");
   }
+});
+
+it("exposes Keychain auth commands and rejects invalid stdin without echoing it", async () => {
+  const help = envault(["auth", "--help"]);
+  expect((await help.closed)[0]).toBe(0);
+  expect(help.output().stdout).toContain("store");
+  expect(help.output().stdout).toContain("remove");
+  const command = envault(["auth", "store", "fixture"]);
+  command.child.stdin.end("not-a-valid-secret-token");
+  expect((await command.closed)[0]).toBe(1);
+  expect(command.output().stdout + command.output().stderr).not.toContain(
+    "not-a-valid-secret-token",
+  );
 });

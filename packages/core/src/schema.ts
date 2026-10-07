@@ -17,6 +17,7 @@ import {
 } from "@env-spec/parser";
 import { z } from "zod";
 import { VaultError, conflict } from "./errors.js";
+import { keychainName } from "./keychain.js";
 
 export const variableName = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const environmentName = /^[A-Za-z][A-Za-z0-9_-]*$/;
@@ -24,18 +25,31 @@ const environmentConfig = z.strictObject({
   vault: z.string().regex(/^[a-z0-9]{26}$/i),
   extends: z.string().regex(environmentName).optional(),
 });
-export const configSchema = z.strictObject({
-  version: z.literal(1),
-  name: z.string().min(1).max(120).optional(),
-  provider: z.literal("1password"),
-  account: z.string().min(1).max(200),
-  auth: z.enum(["desktop", "service-account"]).default("desktop"),
-  defaultEnvironment: z.string().regex(environmentName).optional(),
-  environments: z.record(z.string().regex(environmentName), environmentConfig),
-  legacyFields: z
-    .record(z.string().regex(variableName), z.string().min(1))
-    .optional(),
-});
+export const configSchema = z
+  .strictObject({
+    version: z.literal(1),
+    name: z.string().min(1).max(120).optional(),
+    provider: z.literal("1password"),
+    account: z.string().min(1).max(200),
+    auth: z.enum(["desktop", "service-account"]).default("desktop"),
+    serviceAccountKeychain: z.string().regex(keychainName).optional(),
+    defaultEnvironment: z.string().regex(environmentName).optional(),
+    environments: z.record(
+      z.string().regex(environmentName),
+      environmentConfig,
+    ),
+    legacyFields: z
+      .record(z.string().regex(variableName), z.string().min(1))
+      .optional(),
+  })
+  .superRefine((config, context) => {
+    if (config.serviceAccountKeychain && config.auth !== "service-account")
+      context.addIssue({
+        code: "custom",
+        path: ["serviceAccountKeychain"],
+        message: "Keychain credentials require service-account authentication.",
+      });
+  });
 export type ProjectConfig = z.infer<typeof configSchema>;
 export interface SchemaFile {
   path: string;

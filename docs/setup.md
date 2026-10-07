@@ -91,29 +91,59 @@ underscores, projects with hyphens in environment names retain the JSON form.
 
 It supports:
 
-| Setting              | Meaning                                                                         |
-| -------------------- | ------------------------------------------------------------------------------- |
-| `version`            | `1`                                                                             |
-| `provider`           | `1password`                                                                     |
-| `account`            | Desktop account UUID/name; service-account account boundary metadata            |
-| `auth`               | `desktop` (default) or `service-account`                                        |
-| `name`               | Optional project display name                                                   |
-| `defaultEnvironment` | Optional environment used when `--environment` is omitted                       |
-| `environments`       | Named environments, each with a unique `vault` ID and optional `extends` parent |
-| `legacyFields`       | Optional mapping of variable names to pre-existing field IDs                    |
+| Setting                  | Meaning                                                                         |
+| ------------------------ | ------------------------------------------------------------------------------- |
+| `version`                | `1`                                                                             |
+| `provider`               | `1password`                                                                     |
+| `account`                | Desktop account UUID/name; service-account account boundary metadata            |
+| `auth`                   | `desktop` (default) or `service-account`                                        |
+| `name`                   | Optional project display name                                                   |
+| `serviceAccountKeychain` | Optional macOS Keychain entry name for service-account authentication           |
+| `defaultEnvironment`     | Optional environment used when `--environment` is omitted                       |
+| `environments`           | Named environments, each with a unique `vault` ID and optional `extends` parent |
+| `legacyFields`           | Optional mapping of variable names to pre-existing field IDs                    |
 
 Keep a `# ---` divider between the header and variable definitions so the first
 variable's comments belong to that variable. New schemas default to treating
 values as sensitive; mark non-sensitive definitions `@public` before adding
 literal defaults. Sensitive literal defaults are rejected, even if a vault
-override shadows them. Secret values and authentication tokens belong in
-1Password or the process environment, never in the schema.
+override shadows them. Secret values belong in 1Password; authentication tokens
+belong in macOS Keychain or the process environment, never in the schema.
 
 For service-account authentication, set `auth` to `service-account` in the
-schema and supply `OP_SERVICE_ACCOUNT_TOKEN` to the CLI/server process using your
-existing secure provisioning mechanism. The SDK verifies every configured vault
+schema. Supply `OP_SERVICE_ACCOUNT_TOKEN` to the CLI/server process, or use
+`serviceAccountKeychain` to select a macOS Keychain entry. The SDK verifies every configured vault
 against the authenticated account's accessible vaults. Provider credentials are
 not implicitly forwarded to commands run by this tool.
+
+For macOS Keychain storage, stream the token directly into `envault`:
+
+```bash
+op service-account create envault-testing --account <account> \
+  --vault <dev-vault-id>:read_items,write_items \
+  --vault <staging-vault-id>:read_items,write_items \
+  --vault <prod-vault-id>:read_items,write_items \
+  --expires-in 24h --raw | envault auth store envault-testing
+```
+
+Then set these fields inside the schema's `@vaultConfig` object:
+
+```dotenv
+#   auth='service-account',
+#   serviceAccountKeychain='envault-testing',
+```
+
+`envault` retrieves the token through the native macOS Keychain API and passes it
+to the SDK in memory. Tokens are not accepted as command arguments, printed,
+written to the schema, or sent to the browser. An explicit Keychain reference
+selects that entry instead of `OP_SERVICE_ACCOUNT_TOKEN`, and a missing or
+inaccessible entry fails without falling back to desktop authorization. macOS
+may ask you to authorize Keychain access. Only the entry name is project metadata.
+
+`envault auth remove envault-testing` removes the local credential; it does not
+revoke the service account in 1Password. Revoke it in 1Password or let its
+configured expiry elapse. Service-account tokens cannot create more service
+accounts; initial creation requires your user account authorization.
 
 Your installed CLI can create a scoped service account. For example, capture a
 24-hour token directly into the shell environment, using your account and vault

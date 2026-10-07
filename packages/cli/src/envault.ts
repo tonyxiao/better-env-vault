@@ -2,6 +2,7 @@
 import { Command } from "commander";
 import { safeError } from "../../core/src/errors.js";
 import { serve, webOptions } from "./serve.js";
+import { authCommand } from "./auth.js";
 
 const program = webOptions(
   new Command()
@@ -12,6 +13,8 @@ const program = webOptions(
     )
     .argument("[schema]", "Path to .env.schema", ".env.schema"),
 );
+
+program.addCommand(authCommand());
 
 program.action(async (schema: string, options) => {
   await serve({ ...options, schemas: [schema] });

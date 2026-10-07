@@ -13,6 +13,7 @@ import {
 import type { ProjectConfig } from "./schema.js";
 import { variableName } from "./schema.js";
 import { VaultError, conflict } from "./errors.js";
+import { readServiceAccountToken } from "./keychain.js";
 
 export interface VaultItem {
   id: string;
@@ -88,11 +89,13 @@ export class OnePasswordProvider implements Provider {
     try {
       const token =
         config.auth === "service-account"
-          ? process.env.OP_SERVICE_ACCOUNT_TOKEN
+          ? config.serviceAccountKeychain
+            ? await readServiceAccountToken(config.serviceAccountKeychain)
+            : process.env.OP_SERVICE_ACCOUNT_TOKEN
           : undefined;
       if (config.auth === "service-account" && !token)
         throw new VaultError(
-          "Set OP_SERVICE_ACCOUNT_TOKEN in the CLI/server environment.",
+          "Set serviceAccountKeychain in .env.schema or OP_SERVICE_ACCOUNT_TOKEN in the CLI/server environment.",
         );
       const client = await createClient({
         auth: token ?? new DesktopAuth(config.account),
