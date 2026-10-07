@@ -13,6 +13,7 @@ export interface ResolvedVariable {
   sensitive: boolean;
   value?: string;
   defaultValue?: string;
+  hasDefault: boolean;
   source?: string;
   itemId?: string;
   state: "explicit" | "inherited" | "default" | "missing";
@@ -152,6 +153,7 @@ export async function resolveEnvironment(
       sensitive: item.isSensitive || base.isSensitive,
       value,
       defaultValue: base.resolvedEnvStringValue,
+      hasDefault: base.resolvedEnvStringValue !== undefined,
       source:
         origin?.environment ?? (value === undefined ? undefined : "schema"),
       itemId: origin?.item.id,

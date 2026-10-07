@@ -179,7 +179,17 @@ invalid, or overridden values. Sensitive cells use a fixed mask. **Reveal
 current value** retrieves only the selected cell; closing the editor or changing
 projects discards the revealed value.
 
-Click an environment cell to create or replace its override. Existing notes are
+The eye icon toggles **Reveal all values** / **Hide all values** for the current
+project, including every environment column. Revealed values stay only in memory
+and are cleared when hidden, on project changes, or after connection errors.
+Labels consistently show **Inherits schema default**, **Inherits dev** (or the
+actual source environment), and **Explicit override**.
+
+Click an environment cell to edit inline. Use **Save** or Ctrl/Cmd+Enter to save,
+or **Cancel** / Escape to discard. Editing an inherited cell creates an override
+in the selected environment. Public schema defaults also support inline edits.
+Use a cell's details icon for notes, definition editing, renaming, deletion, and
+override removal. Existing notes are
 preserved unless edited. Reveal the current value to edit existing notes. An
 inherited cell creates an override in the selected environment; **Edit source
 environment** deliberately targets the ancestor instead. **Remove override**
@@ -247,6 +257,10 @@ creation, masking/reveal, notes-only updates, replacement values, empty
 overrides, inheritance, and confirmed deletion, and removes the fixture.
 Existing item versions are checked to remain unchanged. Chrome must be installed.
 If interrupted, `.local/ui-test-recovery.json` identifies only that test fixture.
+
+`npm run test:matrix` checks global reveal/hide, inline editing, inheritance
+labels, cancellation, and late-response masking using a memory provider. It
+requires local Chrome and never accesses 1Password.
 
 The normal test suite uses a memory provider and never mutates live vaults.
 To explicitly test the local desktop SDK with dedicated disposable vaults:

@@ -690,3 +690,81 @@ td {
 .connection-panel button {
   margin-top: 12px;
 }
+
+.visibility-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+}
+.visibility-toggle[aria-pressed="true"] {
+  background: #e8f3ed;
+  border-color: #8bb49e;
+  color: #17634e;
+}
+.matrix-cell {
+  position: relative;
+}
+.matrix-cell .value-cell {
+  padding-right: 36px;
+}
+.cell-details {
+  position: absolute;
+  right: 3px;
+  top: 6px;
+  width: 26px;
+  height: 26px;
+  padding: 5px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  color: #789080;
+}
+.cell-details:hover {
+  background: #e8f1ec;
+  border-color: #d2e2d8;
+}
+.inline-editor {
+  padding: 10px;
+  background: #f5faf7;
+  border: 1px solid #87b49c;
+  border-radius: 7px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.inline-editor textarea {
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  min-width: 0;
+}
+.inline-editor .checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: #667c6e;
+}
+.inline-editor .checkbox input {
+  width: 14px;
+  margin: 0;
+}
+.inline-hint {
+  color: #718179;
+  font-size: 10px;
+}
+.inline-actions {
+  display: flex;
+  gap: 6px;
+}
+.inline-actions button {
+  font-size: 11px;
+  padding: 6px 10px;
+}
+.inline-error {
+  color: #a14230;
+  font-size: 11px;
+}

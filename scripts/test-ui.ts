@@ -64,7 +64,7 @@ async function saved() {
 async function editCell(environment: string) {
   await page!
     .getByRole("button", {
-      name: `Edit ${fixture} in ${environment}`,
+      name: `Details for ${fixture} in ${environment}`,
       exact: true,
     })
     .click({ timeout: 120_000 });

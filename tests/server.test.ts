@@ -6,6 +6,114 @@ import { OnePasswordProvider } from "../packages/core/src/provider.js";
 import { VaultError } from "../packages/core/src/errors.js";
 import { vi } from "vitest";
 
+it("reveals all declared values in one protected snapshot without exposing unmanaged items", async () => {
+  const schema = await fixture(
+    "# @optional\nTOKEN=\n\n# @public\nLABEL=base\n",
+  );
+  const provider = new MemoryProvider();
+  await provider.save(
+    config.environments.dev.vault,
+    "TOKEN",
+    "private-dev",
+    "",
+  );
+  await provider.save(
+    config.environments.prod.vault,
+    "TOKEN",
+    "private-prod",
+    "",
+  );
+  await provider.save(
+    config.environments.dev.vault,
+    "UNMANAGED",
+    "must-stay-unmanaged",
+    "",
+  );
+  const app = await startServer({ schemas: [schema.path], provider });
+  try {
+    expect(
+      (
+        await fetch(app.url + "/api/reveal-all?project=0", {
+          method: "POST",
+          headers: { Origin: app.url, "Content-Type": "application/json" },
+          body: JSON.stringify({ fingerprint: schema.fingerprint }),
+        })
+      ).status,
+    ).toBe(401);
+    const session = await fetch(app.url + "/api/session", {
+      method: "POST",
+      headers: { Origin: app.url, "Content-Type": "application/json" },
+      body: JSON.stringify({ token: app.bootstrap }),
+    });
+    const cookie = session.headers.get("set-cookie")!.split(";")[0];
+    const projects = await (
+      await fetch(app.url + "/api/projects", { headers: { Cookie: cookie } })
+    ).json();
+    const headers = {
+      Cookie: cookie,
+      Origin: app.url,
+      "Content-Type": "application/json",
+      "X-Bev-Mutation": projects.mutationToken,
+    };
+    const payload = JSON.stringify({ fingerprint: schema.fingerprint });
+    const masked = await (
+      await fetch(app.url + "/api/matrix?project=0", {
+        headers: { Cookie: cookie },
+      })
+    ).text();
+    expect(masked).not.toContain("private-dev");
+    expect(
+      (
+        await fetch(app.url + "/api/reveal-all?project=0", {
+          method: "POST",
+          headers: {
+            Cookie: cookie,
+            Origin: app.url,
+            "Content-Type": "application/json",
+          },
+          body: payload,
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await fetch(app.url + "/api/reveal-all?project=0", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ fingerprint: "stale" }),
+        })
+      ).status,
+    ).toBe(409);
+    const response = await fetch(app.url + "/api/reveal-all?project=0", {
+      method: "POST",
+      headers,
+      body: payload,
+    });
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    const all = await response.json();
+    expect(
+      all.resolutions
+        .find((r: any) => r.environment === "staging")
+        .variables.find((v: any) => v.name === "TOKEN"),
+    ).toMatchObject({ value: "private-dev", source: "dev" });
+    expect(
+      all.resolutions
+        .find((r: any) => r.environment === "prod")
+        .variables.find((v: any) => v.name === "TOKEN"),
+    ).toMatchObject({ value: "private-prod", state: "explicit" });
+    expect(JSON.stringify(all)).not.toContain("must-stay-unmanaged");
+    const hiddenAgain = await (
+      await fetch(app.url + "/api/matrix?project=0", {
+        headers: { Cookie: cookie },
+      })
+    ).text();
+    expect(hiddenAgain).not.toContain("private-dev");
+    expect(hiddenAgain).not.toContain("private-prod");
+  } finally {
+    await app.close();
+  }
+});
+
 it("connects another browser with a fresh link, preserves valid sessions, and isolates server cookies by port", async () => {
   const schema = await fixture("# @public\nKEY=example\n");
   const provider = new MemoryProvider();

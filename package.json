@@ -21,7 +21,8 @@
     "format:check": "prettier --check packages apps scripts tests docs README.md package.json tsconfig*.json vitest.config.ts .github/workflows/ci.yml",
     "test:cleanup": "tsc && node dist/scripts/cleanup-local.js",
     "start": "node bin/better-env-vault.mjs serve",
-    "test:ui": "tsx scripts/test-ui.ts"
+    "test:ui": "tsx scripts/test-ui.ts",
+    "test:matrix": "tsx scripts/test-matrix.ts"
   },
   "engines": {
     "node": ">=22"

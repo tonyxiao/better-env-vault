@@ -12,6 +12,7 @@ import type {
   ResolvedVariable,
 } from "../../../packages/core/src/resolver.js";
 import "./style.css";
+import { EyeIcon, InlineEditor, originLabel } from "./MatrixCell.js";
 
 interface Project {
   id: string;
@@ -29,6 +30,20 @@ interface Matrix {
 interface Cell {
   environment: string;
   variable: ResolvedVariable;
+}
+function maskedMatrix(matrix: Matrix): Matrix {
+  return {
+    ...matrix,
+    resolutions: matrix.resolutions.map((resolution) => ({
+      ...resolution,
+      variables: resolution.variables.map(
+        ({ value, defaultValue, ...variable }) => ({
+          ...variable,
+          ...(!variable.sensitive ? { value, defaultValue } : {}),
+        }),
+      ),
+    })),
+  };
 }
 class ApiError extends Error {
   constructor(
@@ -59,6 +74,14 @@ function App() {
   const [cell, setCell] = useState<Cell>();
   const [modal, setModal] = useState<"add" | "settings">();
   const [addName, setAddName] = useState("");
+  const [inline, setInline] = useState<Cell>();
+  const [revealedMatrix, setRevealedMatrix] = useState<Matrix>();
+  const [allVisible, setAllVisible] = useState(false);
+  const [revealingAll, setRevealingAll] = useState(false);
+  const [hideEpoch, setHideEpoch] = useState(0);
+  const visibleIntent = useRef(false);
+  const visibilityGeneration = useRef(0);
+  const matrixRef = useRef<Matrix | undefined>(undefined);
   const token = useRef("");
   const loadId = useRef(0);
   const disconnect = useCallback(() => {
@@ -70,6 +93,13 @@ function App() {
     setModal(undefined);
     setError("");
     setNotice("");
+    setInline(undefined);
+    setRevealedMatrix(undefined);
+    setAllVisible(false);
+    setRevealingAll(false);
+    visibleIntent.current = false;
+    ++visibilityGeneration.current;
+    matrixRef.current = undefined;
     token.current = "";
     ++loadId.current;
   }, []);
@@ -120,13 +150,57 @@ function App() {
     const id = ++loadId.current;
     setBusy(true);
     setError("");
+    const generation = visibilityGeneration.current;
     try {
-      const response = await request<Matrix>(
-        `/api/matrix?project=${encodeURIComponent(project)}`,
-      );
-      if (loadId.current === id) setMatrix(response);
+      let response: Matrix;
+      if (visibleIntent.current && matrixRef.current) {
+        try {
+          response = await request<Matrix>(
+            `/api/reveal-all?project=${encodeURIComponent(project)}`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-Bev-Mutation": token.current,
+              },
+              body: JSON.stringify({
+                fingerprint: matrixRef.current.fingerprint,
+              }),
+            },
+          );
+        } catch (error) {
+          if (!(error instanceof ApiError && error.code === "conflict"))
+            throw error;
+          visibleIntent.current = false;
+          setAllVisible(false);
+          setRevealedMatrix(undefined);
+          setHideEpoch((epoch) => epoch + 1);
+          response = await request<Matrix>(
+            `/api/matrix?project=${encodeURIComponent(project)}`,
+          );
+        }
+      } else
+        response = await request<Matrix>(
+          `/api/matrix?project=${encodeURIComponent(project)}`,
+        );
+      if (
+        loadId.current === id &&
+        visibilityGeneration.current === generation
+      ) {
+        const masked = maskedMatrix(response);
+        matrixRef.current = masked;
+        setMatrix(masked);
+        if (visibleIntent.current) {
+          setRevealedMatrix(response);
+          setAllVisible(true);
+        }
+      }
     } catch (error) {
       if (loadId.current === id) {
+        visibleIntent.current = false;
+        setAllVisible(false);
+        setRevealedMatrix(undefined);
+        setHideEpoch((epoch) => epoch + 1);
         if (error instanceof ApiError && error.code === "session") disconnect();
         else setError((error as Error).message);
       }
@@ -138,14 +212,21 @@ function App() {
     setMatrix(undefined);
     setCell(undefined);
     setModal(undefined);
+    setInline(undefined);
+    setRevealedMatrix(undefined);
+    setAllVisible(false);
+    setRevealingAll(false);
+    visibleIntent.current = false;
+    ++visibilityGeneration.current;
+    matrixRef.current = undefined;
     void refresh();
     return () => {
       ++loadId.current;
     };
   }, [refresh]);
 
-  async function mutate(payload: Record<string, unknown>) {
-    if (!matrix) return;
+  async function mutate(payload: Record<string, unknown>): Promise<boolean> {
+    if (!matrix) return false;
     setBusy(true);
     setError("");
     setNotice("");
@@ -160,11 +241,14 @@ function App() {
       });
       setCell(undefined);
       setModal(undefined);
+      setInline(undefined);
       setNotice("Saved. Values are available on the next environment load.");
       await refresh();
+      return true;
     } catch (error) {
       if (error instanceof ApiError && error.code === "session") disconnect();
       else setError((error as Error).message);
+      return false;
     } finally {
       setBusy(false);
     }
@@ -174,6 +258,7 @@ function App() {
       return await request<{
         value?: string;
         explicitValue?: string;
+        editableValue?: string;
         notes: string;
       }>(`/api/reveal?project=${encodeURIComponent(project)}`, {
         method: "POST",
@@ -192,8 +277,55 @@ function App() {
       throw error;
     }
   }
+  async function toggleAll() {
+    if (visibleIntent.current) {
+      visibleIntent.current = false;
+      ++visibilityGeneration.current;
+      setRevealedMatrix(undefined);
+      setAllVisible(false);
+      setRevealingAll(false);
+      setHideEpoch((epoch) => epoch + 1);
+      return;
+    }
+    if (!matrix) return;
+    visibleIntent.current = true;
+    const generation = ++visibilityGeneration.current;
+    const id = ++loadId.current;
+    setRevealingAll(true);
+    setError("");
+    try {
+      const response = await request<Matrix>(
+        `/api/reveal-all?project=${encodeURIComponent(project)}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Bev-Mutation": token.current,
+          },
+          body: JSON.stringify({ fingerprint: matrix.fingerprint }),
+        },
+      );
+      if (generation !== visibilityGeneration.current || id !== loadId.current)
+        return;
+      const masked = maskedMatrix(response);
+      matrixRef.current = masked;
+      setMatrix(masked);
+      setRevealedMatrix(response);
+      setAllVisible(true);
+    } catch (error) {
+      if (generation !== visibilityGeneration.current) return;
+      visibleIntent.current = false;
+      setRevealedMatrix(undefined);
+      setAllVisible(false);
+      if (error instanceof ApiError && error.code === "session") disconnect();
+      else setError((error as Error).message);
+    } finally {
+      if (generation === visibilityGeneration.current) setRevealingAll(false);
+    }
+  }
+  const displayMatrix = allVisible && revealedMatrix ? revealedMatrix : matrix;
 
-  const rows = matrix?.resolutions[0]?.variables ?? [];
+  const rows = displayMatrix?.resolutions[0]?.variables ?? [];
   const visible = rows.filter((row) => {
     if (
       !`${row.name} ${row.description}`
@@ -275,6 +407,7 @@ function App() {
             disabled={busy || !matrix}
             onClick={() => {
               setCell(undefined);
+              setInline(undefined);
               void refresh();
             }}
           >
@@ -353,6 +486,26 @@ function App() {
             </select>
           </label>
           <button
+            type="button"
+            className="secondary visibility-toggle"
+            aria-label={
+              allVisible || revealingAll
+                ? "Hide all values"
+                : "Reveal all values"
+            }
+            title={
+              allVisible || revealingAll
+                ? "Hide all values"
+                : "Reveal all values"
+            }
+            aria-pressed={allVisible || revealingAll}
+            aria-busy={revealingAll}
+            disabled={busy || !matrix}
+            onClick={() => void toggleAll()}
+          >
+            <EyeIcon hidden={allVisible || revealingAll} />
+          </button>
+          <button
             disabled={busy || !matrix}
             onClick={() => {
               setAddName("");
@@ -385,7 +538,7 @@ function App() {
                         <span className="column-label">
                           {matrix.config.environments[env].extends
                             ? `Inherits ${matrix.config.environments[env].extends}`
-                            : "Overrides schema"}
+                            : "Inherits schema default"}
                         </span>
                         {env}
                         <span className="env-dot" />
@@ -406,64 +559,147 @@ function App() {
                         </div>
                       </th>
                       <td className="default-cell">
-                        <span>
-                          {row.sensitive
-                            ? "—"
-                            : row.defaultValue === undefined
-                              ? "No default"
-                              : row.defaultValue === ""
-                                ? "(empty)"
-                                : row.defaultValue}
-                        </span>
-                        {!row.sensitive ? (
-                          <button
-                            className="text-button"
-                            aria-label={`Edit default for ${row.name}`}
-                            onClick={() =>
-                              setCell({ environment: "schema", variable: row })
+                        {inline?.environment === "schema" &&
+                        inline.variable.name === row.name ? (
+                          <InlineEditor
+                            variable={inline.variable}
+                            environment="schema"
+                            busy={busy}
+                            hideEpoch={hideEpoch}
+                            onLoad={() =>
+                              Promise.resolve({
+                                editableValue: row.defaultValue,
+                              })
                             }
-                          >
-                            Edit default
-                          </button>
-                        ) : null}
+                            onSave={(value) =>
+                              mutate({
+                                action: "default",
+                                name: row.name,
+                                value,
+                                versions: matrix.versions[row.name],
+                              })
+                            }
+                            onCancel={() => setInline(undefined)}
+                          />
+                        ) : (
+                          <>
+                            <span>
+                              {row.sensitive && !allVisible
+                                ? row.hasDefault
+                                  ? "••••••••"
+                                  : "No default"
+                                : row.defaultValue === undefined
+                                  ? "No default"
+                                  : row.defaultValue === ""
+                                    ? "(empty)"
+                                    : row.defaultValue}
+                            </span>
+                            {!row.sensitive ? (
+                              <button
+                                className="text-button"
+                                aria-label={`Edit default for ${row.name}`}
+                                disabled={busy || !row.editable}
+                                title={
+                                  !row.editable
+                                    ? "Expression defaults are read-only"
+                                    : undefined
+                                }
+                                onClick={() =>
+                                  setInline({
+                                    environment: "schema",
+                                    variable: row,
+                                  })
+                                }
+                              >
+                                Edit default
+                              </button>
+                            ) : null}
+                          </>
+                        )}
                       </td>
-                      {matrix.resolutions.map((resolution) => {
+                      {displayMatrix!.resolutions.map((resolution) => {
                         const v = resolution.variables.find(
                           (v) => v.name === row.name,
                         )!;
                         return (
                           <td key={resolution.environment}>
-                            <button
-                              className={`value-cell ${v.state} ${!v.valid ? "invalid" : ""}`}
-                              disabled={busy}
-                              aria-label={`Edit ${v.name} in ${resolution.environment}`}
-                              onClick={() =>
-                                setCell({
-                                  environment: resolution.environment,
-                                  variable: v,
-                                })
-                              }
-                            >
-                              <span className="value">
-                                {v.state === "missing"
-                                  ? "Not set"
-                                  : v.sensitive
-                                    ? "••••••••"
-                                    : v.value === ""
-                                      ? "(empty)"
-                                      : v.value}
-                              </span>
-                              <span className="origin">
-                                {!v.valid ? "⚠ Invalid · " : ""}
-                                {v.state === "explicit"
-                                  ? "Override"
-                                  : v.state === "inherited"
-                                    ? `From ${v.source}`
-                                    : v.state === "default"
-                                      ? "Schema default"
-                                      : "Missing"}
-                              </span>
-                            </button>
+                            {inline?.environment === resolution.environment &&
+                            inline.variable.name === v.name ? (
+                              <InlineEditor
+                                variable={inline.variable}
+                                environment={inline.environment}
+                                busy={busy}
+                                hideEpoch={hideEpoch}
+                                onLoad={() =>
+                                  reveal(resolution.environment, v.name)
+                                }
+                                onSave={(value) =>
+                                  mutate({
+                                    action: "set",
+                                    name: v.name,
+                                    environment: resolution.environment,
+                                    value,
+                                    versions: matrix.versions[v.name],
+                                  })
+                                }
+                                onCancel={() => setInline(undefined)}
+                              />
+                            ) : (
+                              <div className="matrix-cell">
+                                <button
+                                  className={`value-cell ${v.state} ${!v.valid ? "invalid" : ""}`}
+                                  disabled={busy}
+                                  aria-label={`Edit ${v.name} in ${resolution.environment}`}
+                                  onClick={() =>
+                                    setInline({
+                                      environment: resolution.environment,
+                                      variable: v,
+                                    })
+                                  }
+                                >
+                                  <span className="value">
+                                    {v.state === "missing"
+                                      ? "Not set"
+                                      : v.sensitive && !allVisible
+                                        ? "••••••••"
+                                        : v.value === ""
+                                          ? "(empty)"
+                                          : v.value}
+                                  </span>
+                                  <span className="origin">
+                                    {!v.valid ? "⚠ Invalid · " : ""}
+                                    {originLabel(v)}
+                                  </span>
+                                </button>
+                                <button
+                                  type="button"
+                                  className="cell-details"
+                                  disabled={busy}
+                                  aria-label={`Details for ${v.name} in ${resolution.environment}`}
+                                  title="Value details and advanced editing"
+                                  onClick={() => {
+                                    setInline(undefined);
+                                    setCell({
+                                      environment: resolution.environment,
+                                      variable: v,
+                                    });
+                                  }}
+                                >
+                                  <svg
+                                    aria-hidden="true"
+                                    width="16"
+                                    height="16"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="1.7"
+                                  >
+                                    <circle cx="12" cy="12" r="9" />
+                                    <path d="M12 11v6M12 7v2" />
+                                  </svg>
+                                </button>
+                              </div>
+                            )}
                           </td>
                         );
                       })}
@@ -495,7 +731,13 @@ function App() {
                 <i className="legend-dot inherited" />
                 Inherited value
               </span>
-              <span>Sensitive values stay masked until revealed.</span>
+              <span>
+                {allVisible
+                  ? "All matrix values are visible."
+                  : revealingAll
+                    ? "Revealing all values…"
+                    : "Sensitive values stay masked until revealed."}
+              </span>
             </footer>
           </section>
         ) : null}
@@ -652,7 +894,7 @@ function Editor({
   busy: boolean;
   saveError: string;
   onClose: () => void;
-  onSave: (payload: Record<string, unknown>) => Promise<void>;
+  onSave: (payload: Record<string, unknown>) => Promise<unknown>;
   onReveal: (
     environment: string,
     name: string,
@@ -740,13 +982,7 @@ function Editor({
             : cell.environment.toUpperCase()}
         </span>
         <h3>
-          {v.state === "explicit"
-            ? "An explicit override"
-            : v.state === "inherited"
-              ? `Inherited from ${v.source}`
-              : v.state === "missing"
-                ? "No value set"
-                : "Defined in the schema"}
+          {cell.environment === "schema" ? "Schema default" : originLabel(v)}
         </h3>
         <p>{v.description || "No description yet."}</p>
         <p className="chain">
@@ -1009,7 +1245,7 @@ function ProjectDialog({
   busy: boolean;
   saveError: string;
   onClose: () => void;
-  onSave: (payload: Record<string, unknown>) => Promise<void>;
+  onSave: (payload: Record<string, unknown>) => Promise<unknown>;
 }) {
   const [name, setName] = useState(initialName);
   const [description, setDescription] = useState("");

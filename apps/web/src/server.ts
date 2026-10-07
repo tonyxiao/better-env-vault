@@ -204,7 +204,21 @@ export async function startServer(options: {
           providers.set(project.id, cached);
         }
         const provider = await cached.pending;
-        if (url.pathname === "/api/matrix" && request.method === "GET") {
+        const revealAll =
+          url.pathname === "/api/reveal-all" && request.method === "POST";
+        if (
+          revealAll ||
+          (url.pathname === "/api/matrix" && request.method === "GET")
+        ) {
+          if (revealAll) {
+            const data = (await body(request)) as { fingerprint?: string };
+            if (data?.fingerprint !== schema.fingerprint)
+              throw new VaultError(
+                "The schema changed. Refresh before revealing values.",
+                "conflict",
+                409,
+              );
+          }
           const snapshot = await readVaults(schema, provider);
           const environments = Object.keys(schema.config.environments);
           const resolutions = await Promise.all(
@@ -217,7 +231,9 @@ export async function startServer(options: {
             config: schema.config,
             schemaPath: schema.path,
             environments,
-            resolutions: resolutions.map(publicResolution),
+            resolutions: revealAll
+              ? resolutions
+              : resolutions.map(publicResolution),
             versions: Object.fromEntries(
               [
                 ...new Set([
@@ -269,9 +285,13 @@ export async function startServer(options: {
           const explicit = snapshot[data.environment].find(
             (i) => i.name === data.name,
           );
+          const sourceItem = snapshot[record.source ?? ""]?.find(
+            (i) => i.name === data.name,
+          );
           json(response, 200, {
             value: record.value,
             explicitValue: explicit?.value,
+            editableValue: sourceItem?.value ?? record.value,
             notes: explicit?.notes ?? "",
           });
           return;
