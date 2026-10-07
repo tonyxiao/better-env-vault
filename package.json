@@ -1,0 +1,55 @@
+{
+  "name": "better-env-vault",
+  "version": "0.1.0",
+  "description": "Local schema-driven environment manager for 1Password vaults",
+  "type": "module",
+  "private": false,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "bin": {
+    "better-env-vault": "bin/better-env-vault.mjs"
+  },
+  "scripts": {
+    "dev": "tsx packages/cli/src/index.ts",
+    "build": "tsc -p tsconfig.build.json && vite build --config apps/web/vite.config.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:local": "tsc && node dist/scripts/test-local.js",
+    "format": "prettier --write packages apps scripts tests docs README.md package.json tsconfig*.json vitest.config.ts .github/workflows/ci.yml",
+    "format:check": "prettier --check packages apps scripts tests docs README.md package.json tsconfig*.json vitest.config.ts .github/workflows/ci.yml",
+    "test:cleanup": "tsc && node dist/scripts/cleanup-local.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@1password/sdk": "0.5.0",
+    "@env-spec/parser": "0.6.1",
+    "commander": "14.0.2",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "varlock": "1.21.1",
+    "zod": "4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.0",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "@vitejs/plugin-react": "5.0.4",
+    "prettier": "3.6.2",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3",
+    "vite": "7.3.7",
+    "vitest": "4.1.11"
+  },
+  "files": [
+    "bin",
+    "dist/packages",
+    "dist/apps/web/src/server.js",
+    "apps/web/dist",
+    "README.md",
+    "docs/setup.md"
+  ]
+}

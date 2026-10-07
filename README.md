@@ -4,9 +4,9 @@ A local environment-variable manager backed by 1Password vaults, with an
 EnvKey-style view of overrides and inheritance. `.env.schema` is the sole
 project configuration and variable catalog.
 
-The project is currently in planning. See the
-[implementation plan](docs/implementation-plan.md) for the data model, exporter,
-web app, editing behavior, and delivery phases.
+See the [setup guide](docs/setup.md) to configure a schema, load values into a
+shell or child process, and open the local web matrix. The
+[implementation plan](docs/implementation-plan.md) describes the design.
 
 The core model is:
 
@@ -20,4 +20,14 @@ The core model is:
 - A shared resolver powers both shell exports and the web app so the displayed
   effective values match the values applications receive.
 
-No implementation or live credentials are included yet.
+Requires Node.js 22+ and 1Password desktop SDK integration or a service account.
+
+```bash
+npm ci
+npm run build
+npm link
+better-env-vault --help
+```
+
+Run `npm test` for the isolated test suite. Live testing uses dedicated disposable
+vaults and runs only through the explicit `npm run test:local` command.
