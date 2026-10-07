@@ -234,6 +234,23 @@ export async function startServer(options: {
             resolutions: revealAll
               ? resolutions
               : resolutions.map(publicResolution),
+            ...(revealAll
+              ? {
+                  editableValues: Object.fromEntries(
+                    resolutions.map((resolution) => [
+                      resolution.environment,
+                      Object.fromEntries(
+                        resolution.variables.map((variable) => [
+                          variable.name,
+                          snapshot[variable.source ?? ""]?.find(
+                            (item) => item.name === variable.name,
+                          )?.value ?? variable.value,
+                        ]),
+                      ),
+                    ]),
+                  ),
+                }
+              : {}),
             versions: Object.fromEntries(
               [
                 ...new Set([

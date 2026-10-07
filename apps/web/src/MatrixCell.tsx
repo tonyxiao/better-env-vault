@@ -33,29 +33,40 @@ export function InlineEditor({
   environment,
   busy,
   hideEpoch,
+  initialValue,
   onLoad,
   onSave,
   onCancel,
+  onRemove,
 }: {
   variable: ResolvedVariable;
   environment: string;
   busy: boolean;
   hideEpoch: number;
+  initialValue?: { value?: string };
   onLoad: () => Promise<{ editableValue?: string; value?: string }>;
   onSave: (value: string) => Promise<boolean>;
   onCancel: () => void;
+  onRemove?: () => Promise<boolean>;
 }) {
-  const [value, setValue] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [value, setValue] = useState(initialValue?.value ?? "");
+  const [baseline, setBaseline] = useState(initialValue?.value ?? "");
+  const [loading, setLoading] = useState(initialValue === undefined);
   const [error, setError] = useState("");
   const [failedLoad, setFailedLoad] = useState(false);
-  const [empty, setEmpty] = useState(false);
+  const ownEmpty = variable.state === "explicit" || environment === "schema";
+  const [empty, setEmpty] = useState(ownEmpty && initialValue?.value === "");
+  const [baselineEmpty, setBaselineEmpty] = useState(
+    ownEmpty && initialValue?.value === "",
+  );
   const [shown, setShown] = useState(true);
   const initialHideEpoch = useRef(hideEpoch);
   const field = useRef<HTMLTextAreaElement>(null);
   // Capture the explicit edit request once. Parent refreshes must not replace a draft.
   const load = useRef(onLoad);
+  const initial = useRef(initialValue);
   useEffect(() => {
+    if (initial.current !== undefined) return;
     let cancelled = false;
     void load
       .current()
@@ -63,10 +74,13 @@ export function InlineEditor({
         if (cancelled) return;
         const current = result.editableValue ?? result.value ?? "";
         setValue(current);
-        setEmpty(
+        setBaseline(current);
+        const isEmpty =
+          ownEmpty &&
           current === "" &&
-            (result.editableValue !== undefined || result.value !== undefined),
-        );
+          (result.editableValue !== undefined || result.value !== undefined);
+        setEmpty(isEmpty);
+        setBaselineEmpty(isEmpty);
         setLoading(false);
       })
       .catch(() => {
@@ -80,6 +94,7 @@ export function InlineEditor({
       cancelled = true;
     };
   }, []);
+  const dirty = value !== baseline || empty !== baselineEmpty;
   useEffect(() => {
     if (!loading && shown) field.current?.focus();
   }, [loading, shown]);
@@ -114,6 +129,7 @@ export function InlineEditor({
           !loading &&
           !busy &&
           !failedLoad &&
+          dirty &&
           (value !== "" || empty)
         ) {
           event.preventDefault();
@@ -150,7 +166,7 @@ export function InlineEditor({
           Reveal inline value
         </button>
       )}
-      {shown && !loading ? (
+      {shown && !loading && value === "" ? (
         <label className="checkbox">
           <input
             type="checkbox"
@@ -178,7 +194,9 @@ export function InlineEditor({
       <div className="inline-actions">
         <button
           type="submit"
-          disabled={busy || loading || failedLoad || (value === "" && !empty)}
+          disabled={
+            busy || loading || failedLoad || !dirty || (value === "" && !empty)
+          }
         >
           {busy ? "Saving…" : "Save"}
         </button>
@@ -190,6 +208,16 @@ export function InlineEditor({
         >
           Cancel
         </button>
+        {onRemove && variable.state === "explicit" ? (
+          <button
+            type="button"
+            className="text-button"
+            disabled={busy || loading}
+            onClick={() => void onRemove()}
+          >
+            Remove override
+          </button>
+        ) : null}
       </div>
     </form>
   );

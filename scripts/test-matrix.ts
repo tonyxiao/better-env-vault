@@ -20,6 +20,10 @@ const app = await startServer({ schemas: [schema.path], provider });
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 try {
   const page = await browser.newPage();
+  let cellReveals = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/reveal") cellReveals++;
+  });
   await page.goto(app.launchUrl);
   await page
     .getByRole("button", { name: "Edit TOKEN in prod", exact: true })
@@ -51,6 +55,33 @@ try {
   assert.ok(
     (await page.locator("body").innerText()).includes("prod-fixture-value"),
   );
+  const beforeCachedEdit = cellReveals;
+  await page
+    .getByRole("button", { name: "Edit TOKEN in prod", exact: true })
+    .click();
+  const cachedForm = page.getByRole("form", {
+    name: "Edit TOKEN in prod",
+    exact: true,
+  });
+  assert.equal(
+    await cachedForm.getByRole("textbox").inputValue(),
+    "prod-fixture-value",
+  );
+  assert.equal(
+    await cachedForm.getByText("Loading value…", { exact: true }).count(),
+    0,
+  );
+  assert.ok(
+    await cachedForm
+      .getByRole("button", { name: "Save", exact: true })
+      .isDisabled(),
+  );
+  assert.equal(
+    cellReveals,
+    beforeCachedEdit,
+    "Already-revealed values must not be fetched again.",
+  );
+  await cachedForm.getByRole("button", { name: "Cancel", exact: true }).click();
   await page
     .getByRole("button", { name: "Hide all values", exact: true })
     .click();
@@ -85,6 +116,16 @@ try {
     exact: true,
   });
   await inherited.getByRole("textbox").waitFor();
+  assert.ok(
+    await inherited
+      .getByRole("button", { name: "Save", exact: true })
+      .isDisabled(),
+  );
+  assert.equal(
+    (await provider.readVault(config.environments.staging.vault)).length,
+    0,
+    "Opening inherited values does not create an override.",
+  );
   await inherited.getByRole("textbox").fill("staging-override");
   await inherited.getByRole("button", { name: "Save", exact: true }).click();
   await inherited.waitFor({ state: "hidden" });

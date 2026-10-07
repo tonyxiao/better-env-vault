@@ -26,14 +26,16 @@ interface Matrix {
   environments: string[];
   resolutions: Resolution[];
   versions: Record<string, Record<string, number | null>>;
+  editableValues?: Record<string, Record<string, string | undefined>>;
 }
 interface Cell {
   environment: string;
   variable: ResolvedVariable;
 }
 function maskedMatrix(matrix: Matrix): Matrix {
+  const { editableValues: _editableValues, ...metadata } = matrix;
   return {
-    ...matrix,
+    ...metadata,
     resolutions: matrix.resolutions.map((resolution) => ({
       ...resolution,
       variables: resolution.variables.map(
@@ -566,6 +568,7 @@ function App() {
                             environment="schema"
                             busy={busy}
                             hideEpoch={hideEpoch}
+                            initialValue={{ value: row.defaultValue }}
                             onLoad={() =>
                               Promise.resolve({
                                 editableValue: row.defaultValue,
@@ -630,6 +633,19 @@ function App() {
                                 environment={inline.environment}
                                 busy={busy}
                                 hideEpoch={hideEpoch}
+                                initialValue={
+                                  allVisible && revealedMatrix
+                                    ? {
+                                        value:
+                                          revealedMatrix.editableValues?.[
+                                            resolution.environment
+                                          ]?.[v.name] ?? v.value,
+                                      }
+                                    : v.state === "missing" ||
+                                        (v.state === "default" && !v.sensitive)
+                                      ? { value: v.value }
+                                      : undefined
+                                }
                                 onLoad={() =>
                                   reveal(resolution.environment, v.name)
                                 }
@@ -643,6 +659,14 @@ function App() {
                                   })
                                 }
                                 onCancel={() => setInline(undefined)}
+                                onRemove={() =>
+                                  mutate({
+                                    action: "remove",
+                                    name: v.name,
+                                    environment: resolution.environment,
+                                    versions: matrix.versions[v.name],
+                                  })
+                                }
                               />
                             ) : (
                               <div className="matrix-cell">

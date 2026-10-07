@@ -8,9 +8,10 @@ import { vi } from "vitest";
 
 it("reveals all declared values in one protected snapshot without exposing unmanaged items", async () => {
   const schema = await fixture(
-    "# @optional\nTOKEN=\n\n# @public\nLABEL=base\n",
+    "# @optional\nTOKEN=\n\n# @public\nLABEL=base\n\n# @public @type=number\nCOUNT=1\n",
   );
   const provider = new MemoryProvider();
+  await provider.save(config.environments.dev.vault, "COUNT", "001", "");
   await provider.save(
     config.environments.dev.vault,
     "TOKEN",
@@ -91,6 +92,12 @@ it("reveals all declared values in one protected snapshot without exposing unman
     });
     expect(response.headers.get("cache-control")).toBe("no-store");
     const all = await response.json();
+    expect(all.editableValues.dev.COUNT).toBe("001");
+    expect(
+      all.resolutions
+        .find((r: any) => r.environment === "dev")
+        .variables.find((v: any) => v.name === "COUNT").value,
+    ).toBe("1");
     expect(
       all.resolutions
         .find((r: any) => r.environment === "staging")
@@ -109,6 +116,7 @@ it("reveals all declared values in one protected snapshot without exposing unman
     ).text();
     expect(hiddenAgain).not.toContain("private-dev");
     expect(hiddenAgain).not.toContain("private-prod");
+    expect(JSON.parse(hiddenAgain)).not.toHaveProperty("editableValues");
   } finally {
     await app.close();
   }
