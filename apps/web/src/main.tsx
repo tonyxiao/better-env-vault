@@ -495,11 +495,6 @@ function App() {
             {error}
           </div>
         ) : null}
-        {notice ? (
-          <div role="status" className="alert success">
-            {notice}
-          </div>
-        ) : null}
         <section className="workspace-bar" aria-label="Project">
           <div>
             <label htmlFor="project">Project</label>
@@ -716,8 +711,12 @@ function App() {
             ))}
           </section>
         ) : null}
+        <div className="save-status" role="status" aria-live="polite">
+          {notice}
+        </div>
         <p className="footnote">
-          Arrow keys navigate · Enter/F2 edits · Tab saves · Escape cancels.
+          Enter saves down · Tab saves across · Escape cancels · Alt+Enter adds
+          a newline.
           <br />
           Saves update the matrix automatically. Reload direnv or restart your
           application to use new values.

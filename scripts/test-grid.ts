@@ -6,7 +6,7 @@ import { fixture, MemoryProvider, config } from "../tests/helpers.js";
 import { configurationText } from "../packages/core/src/schema.js";
 import { startServer } from "../apps/web/src/server.js";
 const definitions =
-  "# @optional\nTOKEN=\n\n# @public\nLABEL=base\n\n# @public @type=number\nCOUNT=1\n";
+  "# @optional\nTOKEN=\n\n# @public @optional\nLABEL=base\n\n# @public @type=number\nCOUNT=1\n";
 const schema = await fixture(definitions);
 const other = await fixture(definitions);
 const otherConfig = {
@@ -44,6 +44,7 @@ try {
   const page = await browser.newPage({
     viewport: { width: 1280, height: 900 },
   });
+  page.setDefaultTimeout(10_000);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("console", (message) => {
@@ -96,15 +97,42 @@ try {
     return form(name, env);
   }
   async function settled() {
+    await page.getByRole("status").filter({ hasText: "Saved." }).waitFor();
     await page.waitForFunction(
       () => !document.querySelector(".field-progress"),
     );
   }
+  const firstRow = grid.locator('[role="row"][aria-rowindex="2"]');
+  const nextRow = grid.locator('[role="row"][aria-rowindex="3"]');
+  const gridBefore = await grid.boundingBox();
+  const rowBefore = await firstRow.boundingBox();
+  const nextBefore = await nextRow.boundingBox();
+  assert.equal(rowBefore!.height, 72);
   const releaseToken = hold("TOKEN"),
     releaseLabel = hold("LABEL");
   await (await edit("TOKEN", "prod"))
     .getByRole("textbox")
     .fill("pending-token-fixture");
+  assert.equal(
+    (await firstRow.boundingBox())!.height,
+    rowBefore!.height,
+    "Editing never changes the row height.",
+  );
+  assert.equal(
+    (await nextRow.boundingBox())!.y,
+    nextBefore!.y,
+    "Editing never moves the next row.",
+  );
+  assert.equal(
+    (await grid.boundingBox())!.height,
+    gridBefore!.height,
+    "Editing never resizes the grid.",
+  );
+  assert.ok(
+    (await form("TOKEN", "prod").getByRole("textbox").boundingBox())!.height <=
+      32,
+    "The value editor is one compact line.",
+  );
   await form("TOKEN", "prod")
     .getByRole("button", { name: "Save", exact: true })
     .click();
@@ -185,6 +213,16 @@ try {
     )!.value,
     "7",
   );
+  assert.equal(
+    (await grid.boundingBox())!.y,
+    gridBefore!.y,
+    "Save confirmation never moves the grid.",
+  );
+  assert.equal(
+    (await nextRow.boundingBox())!.y,
+    nextBefore!.y,
+    "Completing a save never moves neighbouring rows.",
+  );
   const devLabel = grid.locator('[role="gridcell"]').filter({
     has: page.getByRole("button", { name: "Edit LABEL in dev", exact: true }),
   });
@@ -213,6 +251,11 @@ try {
     .getByRole("alert")
     .filter({ hasText: "Fixture save failed." })
     .waitFor();
+  assert.equal(
+    (await nextRow.boundingBox())!.height,
+    72,
+    "A save failure never expands the row.",
+  );
   assert.ok(
     await page
       .getByRole("button", { name: "Edit TOKEN in prod", exact: true })
@@ -236,6 +279,76 @@ try {
     )!.value,
     "retry-fixture",
   );
+  const labelBefore = (
+    await provider.readVault(config.environments.staging.vault)
+  ).find((v) => v.name === "LABEL")!;
+  await edit("LABEL", "staging");
+  await form("LABEL", "staging").getByRole("textbox").press("Enter");
+  await form("COUNT", "staging").getByRole("textbox").waitFor();
+  assert.equal(
+    (await provider.readVault(config.environments.staging.vault)).find(
+      (v) => v.name === "LABEL",
+    )!.version,
+    labelBefore.version,
+    "Enter on an unchanged cell navigates without writing an override.",
+  );
+  await form("COUNT", "staging").getByRole("textbox").fill("5");
+  await form("COUNT", "staging").getByRole("textbox").press("Enter");
+  await settled();
+  assert.equal(
+    (await provider.readVault(config.environments.staging.vault)).find(
+      (v) => v.name === "COUNT",
+    )!.value,
+    "5",
+  );
+  await (await edit("LABEL", "staging"))
+    .getByRole("textbox")
+    .fill("click-away-fixture");
+  await page
+    .getByRole("button", { name: "Edit COUNT in prod", exact: true })
+    .click();
+  await form("COUNT", "prod").getByRole("textbox").waitFor();
+  await settled();
+  assert.equal(
+    (await provider.readVault(config.environments.staging.vault)).find(
+      (v) => v.name === "LABEL",
+    )!.value,
+    "click-away-fixture",
+    "Clicking another cell commits the changed draft.",
+  );
+  await page.keyboard.press("Escape");
+  await (await edit("LABEL", "staging")).getByRole("textbox").fill("line-one");
+  await form("LABEL", "staging").getByRole("textbox").press("Alt+Enter");
+  await form("LABEL", "staging").getByRole("textbox").press("l");
+  await form("LABEL", "staging").getByRole("textbox").press("Control+Enter");
+  await settled();
+  assert.equal(
+    (await provider.readVault(config.environments.staging.vault)).find(
+      (v) => v.name === "LABEL",
+    )!.value,
+    "line-one\nl",
+    "Alt+Enter preserves literal newlines without changing row height.",
+  );
+  await (await edit("LABEL", "staging")).getByRole("textbox").fill("");
+  await form("LABEL", "staging").getByRole("textbox").press("Control+Enter");
+  await settled();
+  assert.equal(
+    (await provider.readVault(config.environments.staging.vault)).find(
+      (v) => v.name === "LABEL",
+    )!.value,
+    "",
+    "Clearing a populated cell saves an explicit empty override.",
+  );
+  await edit("TOKEN", "staging");
+  await form("TOKEN", "staging").getByRole("textbox").press("Enter");
+  await form("LABEL", "staging").getByRole("textbox").waitFor();
+  assert.ok(
+    !(await provider.readVault(config.environments.staging.vault)).some(
+      (v) => v.name === "TOKEN",
+    ),
+    "Unchanged inherited cells never create overrides.",
+  );
+  await page.keyboard.press("Escape");
   await page.route("**/api/reveal?*", (route) =>
     route.fulfill({
       status: 409,
@@ -322,10 +435,20 @@ try {
   );
   await page.keyboard.press("Escape");
   await mkdir(".local", { recursive: true });
-  await page.screenshot({ path: ".local/grid-async.png", fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page
+    .getByRole("combobox", { name: "Project", exact: true })
+    .selectOption("0");
+  await grid.getByText("Inherits dev", { exact: true }).first().waitFor();
+  await edit("LABEL", "dev");
+  await page.screenshot({
+    path: ".local/spreadsheet-editor.png",
+    fullPage: true,
+  });
+  await page.keyboard.press("Escape");
   assert.deepEqual(errors, [], "The grid must have no runtime or CSP errors.");
   console.log(
-    "Per-field delayed saves, concurrent edits, draft preservation, masking during saves, Tab commit, arrow/F2/Escape navigation, error recovery, project isolation, and frozen columns passed.",
+    "Fixed row/grid geometry, Enter/Tab/click-away commits, multiline and empty values, nonblocking saves, draft preservation, masking, error recovery, keyboard navigation, project isolation, and mobile layout passed.",
   );
 } finally {
   for (const gate of gates.values()) gate.release();

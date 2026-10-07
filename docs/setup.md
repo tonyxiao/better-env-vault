@@ -254,11 +254,15 @@ actual source environment), and **Explicit override**.
 
 The matrix uses React Data Grid with a frozen variable column on wide screens, resizable
 columns, virtualized rows, and keyboard cell navigation. Click a value, or press
-Enter/F2 on a selected cell, to edit. Arrow keys move between cells. Use **Save**
-or Ctrl/Cmd+Enter to save, or **Cancel** / Escape to discard. Tab from the value
-field saves a changed draft and moves to the next editable cell; Shift+Tab moves
-backward. Editing an inherited cell creates an override in the selected
-environment. Public schema defaults also support inline edits.
+Enter/F2 on a selected cell, to edit. Rows keep the same compact height while
+editing, loading, saving, and reporting errors. Arrow keys move between cells.
+Enter saves and moves down; Shift+Enter moves up. Tab saves and moves across;
+Shift+Tab moves backward. Clicking another grid cell commits a changed draft.
+Ctrl/Cmd+Enter saves in place, Escape cancels, and Alt+Enter inserts a literal
+newline. Unchanged inherited/missing cells are never written just by navigating.
+Clearing a previously populated cell saves an explicit empty override if the
+schema permits it; an already empty cell needs explicit empty-value intent. Use the details drawer for larger
+values and notes. Public schema defaults also support inline edits.
 
 Saves run in the background with a spinner in the affected field. You can keep
 editing another field, search/filter, hide values, or switch projects while a

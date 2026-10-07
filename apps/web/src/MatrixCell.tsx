@@ -1,8 +1,14 @@
-import { Eye, EyeOff } from "lucide-react";
+import { Check, Eye, EyeOff, LoaderCircle, X } from "lucide-react";
 import { Button } from "./components/ui/button.js";
 import { Textarea } from "./components/ui/textarea.js";
 import { Checkbox } from "./components/ui/checkbox.js";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import type { ResolvedVariable } from "../../../packages/core/src/resolver.js";
 
 export function originLabel(variable: ResolvedVariable) {
@@ -11,36 +17,36 @@ export function originLabel(variable: ResolvedVariable) {
   if (variable.state === "explicit") return "Explicit override";
   return "Missing value";
 }
-
 export function EyeIcon({ hidden = false }: { hidden?: boolean }) {
   const Icon = hidden ? EyeOff : Eye;
   return <Icon aria-hidden="true" />;
 }
+export type EditDirection = "next" | "previous" | "down" | "up";
 
-export function InlineEditor({
+export function SpreadsheetEditor({
   variable,
   environment,
-  busy,
   hideEpoch,
   initialValue,
+  draftValue,
   onLoad,
   onSave,
+  onLeave,
   onCancel,
-  onRemove,
   onNavigate,
-  draftValue,
+  onCommitReady,
 }: {
   variable: ResolvedVariable;
   environment: string;
-  busy: boolean;
   hideEpoch: number;
   initialValue?: { value?: string };
+  draftValue?: string;
   onLoad: () => Promise<{ editableValue?: string; value?: string }>;
   onSave: (value: string) => Promise<boolean>;
+  onLeave: (value: string) => Promise<boolean>;
   onCancel: () => void;
-  onRemove?: () => Promise<boolean>;
-  onNavigate?: (backward: boolean) => void;
-  draftValue?: string;
+  onNavigate: (direction: EditDirection) => void;
+  onCommitReady: (commit: (() => void) | undefined) => void;
 }) {
   const [value, setValue] = useState(draftValue ?? initialValue?.value ?? "");
   const [baseline, setBaseline] = useState(initialValue?.value ?? "");
@@ -59,10 +65,9 @@ export function InlineEditor({
   const field = useRef<HTMLTextAreaElement>(null);
   const cancelButton = useRef<HTMLButtonElement>(null);
   const revealButton = useRef<HTMLButtonElement>(null);
-  // Capture the explicit edit request once. Parent refreshes must not replace a draft.
-  const load = useRef(onLoad);
-  const initial = useRef(initialValue);
-  const draft = useRef(draftValue);
+  const load = useRef(onLoad),
+    initial = useRef(initialValue),
+    draft = useRef(draftValue);
   useEffect(() => {
     if (initial.current !== undefined) return;
     let cancelled = false;
@@ -93,13 +98,22 @@ export function InlineEditor({
     };
   }, []);
   const dirty = value !== baseline || empty !== baselineEmpty;
+  // Clearing a previously populated cell is deliberate. Opening an already
+  // empty/missing cell still requires explicit intent before creating an item.
+  const canSave =
+    !loading &&
+    !failedLoad &&
+    dirty &&
+    (value !== "" || empty || baseline !== "");
   useEffect(() => {
-    if (!loading) {
-      if (!shown) {
-        if (document.activeElement === document.body)
-          revealButton.current?.focus();
-      } else if (failedLoad) cancelButton.current?.focus();
-      else field.current?.focus();
+    if (loading) return;
+    if (!shown) {
+      if (document.activeElement === document.body)
+        revealButton.current?.focus();
+    } else if (failedLoad) cancelButton.current?.focus();
+    else {
+      field.current?.focus();
+      field.current?.select();
     }
   }, [loading, shown, failedLoad]);
   useEffect(() => {
@@ -108,139 +122,145 @@ export function InlineEditor({
       if (variable.sensitive) setShown(false);
     }
   }, [hideEpoch, variable.sensitive]);
-  async function save(event: FormEvent) {
+  useLayoutEffect(() => {
+    onCommitReady(() => {
+      if (canSave) void onLeave(value);
+    });
+    return () => onCommitReady(undefined);
+  }, [canSave, value, onLeave, onCommitReady]);
+  function save(event: FormEvent) {
     event.preventDefault();
-    setError("");
-    const saved = await onSave(value);
-    if (!saved)
-      setError(
-        "The value was not saved. Check the message above, then retry or cancel.",
-      );
+    if (canSave) void onSave(value);
   }
   return (
     <form
-      className="inline-editor"
+      className="spreadsheet-editor"
       aria-label={`Edit ${variable.name} in ${environment}`}
-      onSubmit={(event) => void save(event)}
+      onSubmit={save}
       onKeyDown={(event) => {
-        if (event.key === "Escape" && !busy) {
+        if (event.key === "Escape") {
           event.preventDefault();
           event.stopPropagation();
           onCancel();
-        }
-        if (
-          event.key === "Tab" &&
-          event.target === field.current &&
-          !loading &&
-          !busy &&
-          !failedLoad &&
-          onNavigate
-        ) {
-          if (dirty && value === "" && !empty) return;
-          event.preventDefault();
-          event.stopPropagation();
-          if (dirty) void onSave(value);
-          onNavigate(event.shiftKey);
           return;
         }
         if (
-          event.key === "Enter" &&
-          (event.metaKey || event.ctrlKey) &&
-          !loading &&
-          !busy &&
-          !failedLoad &&
-          dirty &&
-          (value !== "" || empty)
-        ) {
+          event.target !== field.current ||
+          (event.key !== "Enter" && event.key !== "Tab")
+        )
+          return;
+        if (event.key === "Enter" && event.altKey) {
           event.preventDefault();
-          event.currentTarget.requestSubmit();
+          event.stopPropagation();
+          const input = field.current!;
+          input.setRangeText(
+            "\n",
+            input.selectionStart,
+            input.selectionEnd,
+            "end",
+          );
+          setValue(input.value);
+          setEmpty(false);
+          return;
         }
+        event.preventDefault();
+        event.stopPropagation();
+        if (loading || failedLoad || (dirty && !canSave)) return;
+        if (canSave) void onSave(value);
+        else onCancel();
+        if (event.key === "Tab")
+          onNavigate(event.shiftKey ? "previous" : "next");
+        else if (!event.ctrlKey && !event.metaKey)
+          onNavigate(event.shiftKey ? "up" : "down");
       }}
     >
-      <span className="origin">
-        {environment === "schema" ? "Schema default" : originLabel(variable)}
-      </span>
-      {loading ? (
-        <span role="status">Loading value…</span>
-      ) : shown ? (
-        <Textarea
-          ref={field}
-          aria-label={`${variable.name} value in ${environment}`}
-          value={value}
-          onChange={(event) => {
-            setValue(event.target.value);
-            setEmpty(false);
-            setError("");
-          }}
-          rows={3}
-          autoComplete="off"
-          spellCheck={false}
-          disabled={busy || failedLoad}
-        />
-      ) : (
-        <Button
-          ref={revealButton}
-          type="button"
-          variant="outline"
-          onClick={() => setShown(true)}
-        >
-          Reveal inline value
-        </Button>
-      )}
-      {shown && !loading && value === "" ? (
-        <label className="checkbox">
-          <Checkbox
-            checked={empty}
-            onCheckedChange={(checked) => {
-              setEmpty(checked === true);
-              if (checked === true) setValue("");
+      <div className="spreadsheet-control">
+        {loading ? (
+          <span className="spreadsheet-loading" role="status">
+            <LoaderCircle
+              className="size-3.5 animate-spin"
+              aria-hidden="true"
+            />
+            Loading value…
+          </span>
+        ) : shown ? (
+          <Textarea
+            ref={field}
+            className="spreadsheet-input"
+            aria-label={`${variable.name} value in ${environment}`}
+            value={value}
+            onChange={(event) => {
+              setValue(event.target.value);
+              setEmpty(false);
             }}
-            disabled={busy}
+            rows={1}
+            wrap="off"
+            autoComplete="off"
+            spellCheck={false}
+            disabled={failedLoad}
+            title="Enter saves and moves down; Tab saves and moves across; Alt+Enter inserts a newline"
           />
-          Set an explicit empty value
-        </label>
-      ) : null}
-      {environment !== "schema" &&
-      (variable.state === "inherited" || variable.state === "default") ? (
-        <span className="inline-hint">
-          Saving creates an override in {environment}.
-        </span>
-      ) : null}
-      {error ? (
-        <span role="alert" className="inline-error">
-          {error}
-        </span>
-      ) : null}
-      <div className="inline-actions">
+        ) : (
+          <Button
+            ref={revealButton}
+            className="spreadsheet-reveal"
+            size="xs"
+            variant="ghost"
+            type="button"
+            onClick={() => setShown(true)}
+          >
+            <EyeIcon />
+            Reveal inline value
+          </Button>
+        )}
+        {shown && !loading && value === "" && baseline === "" ? (
+          <label
+            className="spreadsheet-empty"
+            title="Set an explicit empty value"
+          >
+            <Checkbox
+              checked={empty}
+              onCheckedChange={(checked) => setEmpty(checked === true)}
+              disabled={failedLoad}
+            />
+            <span className="sr-only">Set an explicit empty value</span>
+          </label>
+        ) : null}
         <Button
           type="submit"
-          disabled={
-            busy || loading || failedLoad || !dirty || (value === "" && !empty)
-          }
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Save"
+          title="Save (Ctrl/Cmd+Enter)"
+          disabled={!canSave}
         >
-          {busy ? "Saving…" : "Save"}
+          <Check aria-hidden="true" />
         </Button>
         <Button
           ref={cancelButton}
           type="button"
-          variant="outline"
-          disabled={busy}
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Cancel"
+          title="Cancel (Escape)"
           onClick={onCancel}
         >
-          Cancel
+          <X aria-hidden="true" />
         </Button>
-        {onRemove && variable.state === "explicit" ? (
-          <Button
-            type="button"
-            variant="link"
-            className="text-button"
-            disabled={busy || loading}
-            onClick={() => void onRemove()}
-          >
-            Remove override
-          </Button>
-        ) : null}
       </div>
+      {error ? (
+        <span
+          className="spreadsheet-caption inline-error"
+          role="alert"
+          title={error}
+        >
+          {error}
+        </span>
+      ) : (
+        <span className="spreadsheet-caption origin">
+          {environment === "schema" ? "Schema default" : originLabel(variable)}
+        </span>
+      )}
     </form>
   );
 }

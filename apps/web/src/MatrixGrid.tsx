@@ -1,11 +1,4 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type Dispatch,
-  type SetStateAction,
-} from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import {
   DataGrid,
   type Column,
@@ -15,7 +8,11 @@ import {
 import "react-data-grid/lib/styles.css";
 import { Info, LoaderCircle, RotateCcw } from "lucide-react";
 import { Button } from "./components/ui/button.js";
-import { InlineEditor, originLabel } from "./MatrixCell.js";
+import {
+  SpreadsheetEditor,
+  originLabel,
+  type EditDirection,
+} from "./MatrixCell.js";
 import {
   fieldKey,
   type Cell,
@@ -23,6 +20,12 @@ import {
   type SaveOperation,
 } from "./matrix-model.js";
 import type { ResolvedVariable } from "../../../packages/core/src/resolver.js";
+
+interface ActiveEdit {
+  rowIdx: number;
+  idx: number;
+  commit: () => void;
+}
 
 interface GridRow {
   name: string;
@@ -58,7 +61,7 @@ function GridEditor({
   hideEpoch,
   onSave,
   onReveal,
-  setExpanded,
+  registerCommit,
   onNavigate,
   draftValue,
 }: RenderEditCellProps<GridRow> & {
@@ -69,13 +72,15 @@ function GridEditor({
   hideEpoch: number;
   onSave: Props["onSave"];
   onReveal: Props["onReveal"];
-  setExpanded: Dispatch<SetStateAction<string | undefined>>;
-  onNavigate: (rowIdx: number, idx: number, backward: boolean) => void;
+  registerCommit: (entry: ActiveEdit | undefined) => void;
+  onNavigate: (rowIdx: number, idx: number, direction: EditDirection) => void;
 }) {
-  useEffect(() => {
-    setExpanded(row.name);
-    return () => setExpanded(undefined);
-  }, [row.name, setExpanded]);
+  const onCommitReady = useCallback(
+    (commit: (() => void) | undefined) => {
+      registerCommit(commit ? { rowIdx, idx: column.idx, commit } : undefined);
+    },
+    [rowIdx, column.idx, registerCommit],
+  );
   const variable =
     environment === "schema" ? row.definition : row.cells[environment];
   // Capture the optimistic-concurrency versions when editing begins. Background
@@ -101,10 +106,9 @@ function GridEditor({
     return result;
   }
   return (
-    <InlineEditor
+    <SpreadsheetEditor
       variable={variable}
       environment={environment}
-      busy={false}
       hideEpoch={hideEpoch}
       draftValue={draftValue}
       initialValue={initialValue}
@@ -122,21 +126,21 @@ function GridEditor({
           versions,
         })
       }
-      onRemove={
-        environment === "schema"
-          ? undefined
-          : () =>
-              submit({
-                action: "remove",
-                name: row.name,
-                environment,
-                versions,
-              })
+      onLeave={(value) =>
+        onSave({
+          fingerprint,
+          action: environment === "schema" ? "default" : "set",
+          name: row.name,
+          environment: environment === "schema" ? undefined : environment,
+          value,
+          versions,
+        })
       }
       onCancel={() => onClose(false)}
-      onNavigate={(backward) => {
+      onCommitReady={onCommitReady}
+      onNavigate={(direction) => {
         onClose(false, false);
-        onNavigate(rowIdx, column.idx, backward);
+        onNavigate(rowIdx, column.idx, direction);
       }}
     />
   );
@@ -158,7 +162,10 @@ export function MatrixGrid(props: Props) {
     onDetails,
   } = props;
   const grid = useRef<DataGridHandle>(null);
-  const [expanded, setExpanded] = useState<string>();
+  const activeEdit = useRef<ActiveEdit | undefined>(undefined);
+  const registerCommit = useCallback((entry: ActiveEdit | undefined) => {
+    activeEdit.current = entry;
+  }, []);
   const [freezeVariables, setFreezeVariables] = useState(
     () => window.matchMedia("(min-width: 640px)").matches,
   );
@@ -168,18 +175,6 @@ export function MatrixGrid(props: Props) {
     query.addEventListener("change", change);
     return () => query.removeEventListener("change", change);
   }, []);
-  const errorRows = useMemo(
-    () =>
-      new Set(
-        Object.values(operations)
-          .filter(
-            (operation) =>
-              operation.project === project && operation.status === "error",
-          )
-          .map((operation) => operation.name),
-      ),
-    [operations, project],
-  );
   const rows = useMemo(() => {
     const environments = new Map(
       displayMatrix.resolutions.map((resolution) => [
@@ -202,7 +197,6 @@ export function MatrixGrid(props: Props) {
   }, [variables, matrix.environments, displayMatrix]);
   useEffect(() => {
     grid.current?.setActivePosition({ rowIdx: -1, idx: 0 });
-    setExpanded(undefined);
   }, [resetEpoch]);
   function operation(name: string, environment: string) {
     return operations[fieldKey(project, name, environment)];
@@ -216,19 +210,23 @@ export function MatrixGrid(props: Props) {
         (!row.definition.sensitive && row.definition.editable))
     );
   }
-  function navigate(rowIdx: number, idx: number, backward: boolean) {
+  function navigate(rowIdx: number, idx: number, direction: EditDirection) {
     const keys = ["variable", "schema", ...matrix.environments];
     let nextRow = rowIdx,
       nextIdx = idx;
     for (let step = 0; step < rows.length * keys.length; step++) {
-      nextIdx += backward ? -1 : 1;
-      if (nextIdx >= keys.length) {
-        nextIdx = 1;
-        nextRow++;
-      }
-      if (nextIdx < 1) {
-        nextIdx = keys.length - 1;
-        nextRow--;
+      if (direction === "up" || direction === "down")
+        nextRow += direction === "up" ? -1 : 1;
+      else {
+        nextIdx += direction === "previous" ? -1 : 1;
+        if (nextIdx >= keys.length) {
+          nextIdx = 1;
+          nextRow++;
+        }
+        if (nextIdx < 1) {
+          nextIdx = keys.length - 1;
+          nextRow--;
+        }
       }
       if (nextRow < 0 || nextRow >= rows.length) return;
       if (editable(rows[nextRow], keys[nextIdx])) {
@@ -296,10 +294,16 @@ export function MatrixGrid(props: Props) {
           }
         >
           <span className="value">{text}</span>
-          <span className="origin">
-            {environment === "schema"
-              ? "Schema default"
-              : `${!variable.valid ? "Invalid · " : ""}${originLabel(variable)}`}
+          <span
+            className={`origin ${active?.status === "error" ? "field-error-message" : ""}`}
+            role={active?.status === "error" ? "alert" : undefined}
+            title={active?.error}
+          >
+            {active?.status === "error"
+              ? active.error
+              : environment === "schema"
+                ? "Schema default"
+                : `${!variable.valid ? "Invalid · " : ""}${originLabel(variable)}`}
           </span>
         </Button>
         {saving ? (
@@ -334,17 +338,16 @@ export function MatrixGrid(props: Props) {
           </Button>
         ) : null}
         {active?.status === "error" ? (
-          <div className="field-error" role="alert">
-            <span>{active.error}</span>
-            <Button
-              size="xs"
-              variant="outline"
-              aria-label={`Retry saving ${row.name} in ${environment}`}
-              onClick={() => void onSave(active.payload)}
-            >
-              <RotateCcw aria-hidden="true" /> Retry
-            </Button>
-          </div>
+          <Button
+            size="icon-xs"
+            variant="outline"
+            className="cell-retry"
+            aria-label={`Retry saving ${row.name} in ${environment}`}
+            title={`${active.error} — Retry save`}
+            onClick={() => void onSave(active.payload)}
+          >
+            <RotateCcw aria-hidden="true" />
+          </Button>
         ) : null}
       </div>
     );
@@ -363,8 +366,11 @@ export function MatrixGrid(props: Props) {
         </span>
       ),
       renderCell: ({ row }) => (
-        <div className="variable-cell">
-          <code>{row.name}</code>
+        <div
+          className="variable-cell"
+          title={row.definition.description || row.name}
+        >
+          <code title={row.name}>{row.name}</code>
           <p>{row.definition.description || "No description"}</p>
           <div className="badges">
             <span>{row.definition.type}</span>
@@ -425,20 +431,14 @@ export function MatrixGrid(props: Props) {
                   .value as string)
               : undefined
           }
-          setExpanded={setExpanded}
+          registerCommit={registerCommit}
           onNavigate={navigate}
         />
       ),
     })),
   ];
-  function rowHeight(row: GridRow) {
-    if (expanded === row.name) return 290;
-    return errorRows.has(row.name) ? 180 : 112;
-  }
-  const height = Math.min(
-    620,
-    72 + rows.reduce((total, row) => total + rowHeight(row), 0),
-  );
+  const rowHeight = 72;
+  const height = Math.min(620, 56 + rows.length * rowHeight);
   return (
     <DataGrid
       ref={grid}
@@ -447,9 +447,17 @@ export function MatrixGrid(props: Props) {
       columns={columns}
       rows={rows}
       rowKeyGetter={(row) => row.name}
-      headerRowHeight={72}
+      headerRowHeight={56}
       rowHeight={rowHeight}
       style={{ height: Math.max(184, height) }}
+      onCellMouseDown={(args) => {
+        const current = activeEdit.current;
+        if (
+          current &&
+          (current.rowIdx !== args.rowIdx || current.idx !== args.column.idx)
+        )
+          current.commit();
+      }}
       onCellKeyDown={(args, event) => {
         if (args.mode === "EDIT") {
           event.preventGridDefault();

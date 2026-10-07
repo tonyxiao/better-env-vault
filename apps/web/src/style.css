@@ -295,8 +295,7 @@ main {
 .drawer label [data-slot="native-select-wrapper"] {
   @apply mt-2;
 }
-.drawer label.checkbox,
-.inline-editor .checkbox {
+.drawer label.checkbox {
   @apply flex items-center gap-2 text-xs;
 }
 .form-actions {
@@ -341,21 +340,6 @@ main {
 }
 .cell-details {
   @apply absolute top-1.5 right-1;
-}
-.inline-editor {
-  @apply flex flex-col gap-2 rounded-lg border border-ring bg-muted/40 p-3;
-}
-.inline-editor textarea {
-  @apply min-w-0 font-mono text-xs;
-}
-.inline-hint {
-  @apply text-[11px] text-muted-foreground;
-}
-.inline-actions {
-  @apply flex flex-wrap gap-1.5;
-}
-.inline-actions [data-slot="button"] {
-  @apply h-7 px-2 text-xs;
 }
 .inline-error {
   @apply text-xs text-destructive;
@@ -437,7 +421,7 @@ main {
 }
 .environment-grid [role="gridcell"],
 .environment-grid [role="columnheader"] {
-  padding: 12px;
+  padding: 8px 12px;
   white-space: normal;
 }
 .environment-grid [role="columnheader"] {
@@ -446,31 +430,125 @@ main {
 .environment-grid [role="gridcell"] {
   align-content: center;
 }
-.environment-grid .inline-editor {
-  border: 0;
-  background: transparent;
-  padding: 0;
+.environment-grid .value-cell {
+  min-height: 48px;
+  height: 48px;
+  padding: 5px 32px 5px 8px;
+  gap: 2px;
+  border-radius: 4px;
+}
+.environment-grid .value {
+  display: block;
+  width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 18px;
+}
+.environment-grid .origin {
+  font-size: 10px;
+  line-height: 14px;
 }
 .environment-grid .variable-cell {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 3px;
   min-width: 0;
 }
 .variable-cell code {
   font-size: 12px;
   font-weight: 600;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .variable-cell p {
   color: var(--muted-foreground);
   font-size: 11px;
-  line-height: 1.4;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  line-height: 14px;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   margin: 0;
+}
+.environment-grid .badges {
+  gap: 3px;
+  flex-wrap: nowrap;
+}
+.environment-grid .badges span {
+  font-size: 9px;
+  line-height: 12px;
+  padding: 0 4px;
+}
+.environment-grid .cell-details {
+  top: 0;
+  right: 2px;
+  height: 24px;
+  width: 24px;
+}
+.spreadsheet-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  margin: 0;
+}
+.spreadsheet-control {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.spreadsheet-input {
+  flex: 1;
+  width: 0;
+  min-width: 0;
+  height: 30px;
+  min-height: 30px;
+  padding: 5px 6px;
+  resize: none;
+  border-radius: 3px;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre;
+  overflow: auto;
+  box-shadow: none !important;
+}
+.spreadsheet-input:focus-visible {
+  border-color: var(--ring);
+}
+.spreadsheet-caption {
+  display: block;
+  line-height: 14px;
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.spreadsheet-empty {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 0 2px;
+}
+.spreadsheet-loading {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.spreadsheet-reveal {
+  flex: 1;
+  justify-content: start;
+}
+.environment-grid > .empty {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  padding: 24px;
 }
 .variable-count {
   color: var(--muted-foreground);
@@ -488,16 +566,18 @@ main {
 .saving-cell .value-cell {
   opacity: 0.75;
 }
-.field-error {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  margin-top: 6px;
+.field-error-message {
   color: var(--destructive);
-  font-size: 11px;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
 }
-.field-error [data-slot="button"] {
-  align-self: flex-start;
+.cell-retry {
+  position: absolute;
+  bottom: 0;
+  right: 2px;
 }
 .operation-notice {
   display: flex;
@@ -506,4 +586,15 @@ main {
   margin: 8px 0;
   font-size: 12px;
   color: var(--muted-foreground);
+}
+
+.save-status {
+  height: 24px;
+  padding-top: 6px;
+  font-size: 11px;
+  line-height: 18px;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
