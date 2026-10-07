@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   assertUnchanged,
   configSchema,
+  configurationDecoratorText,
   literal,
   loadSchema,
   parseSchema,
@@ -105,7 +106,7 @@ export function editSchemaText(
       {
         start: location.start.offset,
         end: location.end.offset,
-        text: `@vaultConfig=${literal(JSON.stringify(request.config))}`,
+        text: configurationDecoratorText(request.config, eol),
       },
     ]);
   }

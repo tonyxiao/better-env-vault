@@ -37,7 +37,27 @@ Then edit its schema. This example uses placeholders; replace each ID with the
 actual 26-character vault ID:
 
 ```dotenv
-# @vaultConfig='{"version":1,"name":"Example","provider":"1password","account":"<account-uuid>","auth":"desktop","defaultEnvironment":"dev","environments":{"dev":{"vault":"<dev-vault-id>"},"staging":{"vault":"<staging-vault-id>","extends":"dev"},"prod":{"vault":"<prod-vault-id>","extends":"staging"}}}'
+# @vaultConfig={
+#   version=1,
+#   name='Example',
+#   provider='1password',
+#   account='<account-uuid>',
+#   auth='desktop',
+#   defaultEnvironment='dev',
+#   environments={
+#     dev={
+#       vault='<dev-vault-id>',
+#     },
+#     staging={
+#       vault='<staging-vault-id>',
+#       extends='dev',
+#     },
+#     prod={
+#       vault='<prod-vault-id>',
+#       extends='staging',
+#     },
+#   },
+# }
 # @defaultSensitive=true
 # ---
 
@@ -58,7 +78,18 @@ API_TOKEN=
 PRODUCTION_TOKEN=
 ```
 
-`@vaultConfig` is a static JSON string in the schema's header. It supports:
+`@vaultConfig` is Better Env Vault's custom project-metadata decorator. It is
+parsed by `@env-spec/parser`, then validated and interpreted by Better Env Vault;
+it is not a built-in Env Spec or Varlock project configuration feature.
+
+New schemas and project-settings saves use the parser's native multiline object
+syntax: `key=value`, comma-separated fields, nested braces, and `#` on every
+continuation line. Values must be static; resolver functions and interpolation
+are rejected in project metadata. The previous single-line JSON-string form
+remains supported. Because native object keys only support letters, digits, and
+underscores, projects with hyphens in environment names retain the JSON form.
+
+It supports:
 
 | Setting              | Meaning                                                                         |
 | -------------------- | ------------------------------------------------------------------------------- |

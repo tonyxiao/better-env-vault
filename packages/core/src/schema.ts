@@ -11,6 +11,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   parseEnvSpecDotEnvFile,
   ParsedEnvSpecStaticValue,
+  ParsedEnvSpecObjectLiteral,
   type ParsedEnvSpecFile,
   type ParsedEnvSpecConfigItem,
 } from "@env-spec/parser";
@@ -107,20 +108,37 @@ export function parseSchema(text: string): {
   const configs = parsed.decoratorsArray.filter(
     (d) => d.name === "vaultConfig",
   );
-  if (
-    configs.length !== 1 ||
-    !(configs[0].value instanceof ParsedEnvSpecStaticValue)
-  ) {
+  if (configs.length !== 1) {
     throw new VaultError(
-      "Declare exactly one static @vaultConfig JSON string in the schema header.",
+      "Declare exactly one static @vaultConfig object or JSON string in the schema header.",
     );
+  }
+  // Read the native AST without evaluating interpolation or resolver functions.
+  // Do not use simplifiedValue: it silently omits dynamic fields and duplicate keys.
+  function staticObject(value: unknown): unknown {
+    if (value instanceof ParsedEnvSpecStaticValue) return value.value;
+    if (value instanceof ParsedEnvSpecObjectLiteral) {
+      const result: Record<string, unknown> = Object.create(null);
+      for (const entry of value.values) {
+        if (Object.hasOwn(result, entry.key))
+          throw new Error("Duplicate configuration field");
+        result[entry.key] = staticObject(entry.value);
+      }
+      return result;
+    }
+    throw new Error("Configuration must be static");
   }
   let config: ProjectConfig;
   try {
-    config = configSchema.parse(JSON.parse(configs[0].simplifiedValue));
+    const value = configs[0].value;
+    config = configSchema.parse(
+      value instanceof ParsedEnvSpecStaticValue
+        ? JSON.parse(value.value)
+        : staticObject(value),
+    );
   } catch {
     throw new VaultError(
-      "Invalid @vaultConfig. Expected version 1, provider, account, and named environments with explicit vault IDs.",
+      "Invalid @vaultConfig. Expected a static object or JSON string with version 1, provider, account, and named environments with explicit vault IDs.",
     );
   }
   if (!Object.keys(config.environments).length)
@@ -262,6 +280,47 @@ export function literal(value: string): string {
   return encoded;
 }
 
+/** Native Env Spec object syntax, with every continuation line remaining a comment. */
+export function configurationDecoratorText(
+  config: ProjectConfig,
+  eol = "\n",
+): string {
+  const normalized = configSchema.parse(config);
+  function hasIdentifierKeys(value: unknown): boolean {
+    if (typeof value === "string") return !/[\r\n]/.test(value);
+    if (!value || typeof value !== "object") return true;
+    return Object.entries(value).every(
+      ([key, child]) => variableName.test(key) && hasIdentifierKeys(child),
+    );
+  }
+  // The parser's native object keys cannot contain hyphens. Keep those projects
+  // compatible with the existing JSON representation instead of changing names.
+  if (!hasIdentifierKeys(normalized))
+    return `@vaultConfig=${literal(JSON.stringify(normalized))}`;
+  function objectText(value: Record<string, unknown>, depth: number): string {
+    const entries = Object.entries(value);
+    if (!entries.length) return "{}";
+    return (
+      "{" +
+      eol +
+      entries
+        .map(([key, child]) => {
+          const encoded =
+            child && typeof child === "object"
+              ? objectText(child as Record<string, unknown>, depth + 1)
+              : typeof child === "string"
+                ? literal(child)
+                : String(child);
+          return `# ${"  ".repeat(depth + 1)}${key}=${encoded},`;
+        })
+        .join(eol) +
+      eol +
+      `# ${"  ".repeat(depth)}}`
+    );
+  }
+  return `@vaultConfig=${objectText(normalized, 0)}`;
+}
+
 export function configurationText(config: ProjectConfig): string {
-  return `# @vaultConfig=${literal(JSON.stringify(configSchema.parse(config)))}\n# @defaultSensitive=true\n# ---\n\n`;
+  return `# ${configurationDecoratorText(config)}\n# @defaultSensitive=true\n# ---\n\n`;
 }

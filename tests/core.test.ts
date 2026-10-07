@@ -1,4 +1,8 @@
 import { describe, it, expect } from "vitest";
+import {
+  parseEnvSpecDotEnvFile,
+  ParsedEnvSpecObjectLiteral,
+} from "@env-spec/parser";
 import { readFile, writeFile, stat } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -54,6 +58,79 @@ describe("schema and project boundary", () => {
         configurationText(config).replace("# ---", "# @import=./other\n# ---"),
       ),
     ).toThrow("Unsupported");
+  });
+  it("generates readable native metadata that the Env Spec parser reads directly", () => {
+    const text = configurationText(config);
+    const parsed = parseEnvSpecDotEnvFile(text + "TOKEN=\n");
+    const metadata = parsed.decoratorsArray.find(
+      (decorator) => decorator.name === "vaultConfig",
+    )!;
+    expect(metadata.value).toBeInstanceOf(ParsedEnvSpecObjectLiteral);
+    expect(
+      (metadata.value as ParsedEnvSpecObjectLiteral).simplifiedValue,
+    ).toEqual(config);
+    expect(text).toContain("#     prod={\n#       vault=");
+    expect(parseSchema(text).config).toEqual(config);
+  });
+  it("retains compatibility with JSON headers and non-identifier environment names", () => {
+    const legacy = `# @vaultConfig=${literal(JSON.stringify(config))}\n# ---\nTOKEN=\n`;
+    expect(parseSchema(legacy).config).toEqual(config);
+    const hyphenated = {
+      ...config,
+      defaultEnvironment: "dev-us",
+      environments: { "dev-us": config.environments.dev },
+    };
+    expect(configurationText(hyphenated)).toMatch(/^# @vaultConfig='/);
+    expect(parseSchema(configurationText(hyphenated)).config).toEqual(
+      hyphenated,
+    );
+    const multiline = { ...config, name: "Example\nProject" };
+    expect(parseSchema(configurationText(multiline)).config).toEqual(multiline);
+  });
+  it("rejects duplicate metadata keys and dynamic fields even when optional", () => {
+    const text = configurationText(config);
+    expect(() =>
+      parseSchema(text.replace("version=1,", "version=1, version=1,")),
+    ).toThrow("Invalid @vaultConfig");
+    expect(() =>
+      parseSchema(text.replace("#   auth='desktop',", "#   auth=ref(AUTH),")),
+    ).toThrow("Invalid @vaultConfig");
+    expect(() =>
+      parseSchema(
+        text.replace(
+          "#   account='example-account',",
+          '#   account="${ACCOUNT}",',
+        ),
+      ),
+    ).toThrow("Invalid @vaultConfig");
+    expect(() =>
+      parseSchema(
+        text.replace("#       extends='dev',", "#       extends=ref(PARENT),"),
+      ),
+    ).toThrow("Invalid @vaultConfig");
+  });
+  it("updates multiline metadata and migrates JSON headers while preserving CRLF and variable bytes", async () => {
+    const definition = "# @public\nKEY='unchanged' # trailing comment\n";
+    const native = await fixture(definition);
+    const legacy = `# @vaultConfig=${literal(JSON.stringify(config))}\n# @defaultSensitive=false # custom setting\n# ---\n\n${definition}`;
+    for (const input of [native.text, legacy].map((text) =>
+      text.replaceAll("\n", "\r\n"),
+    )) {
+      await writeFile(native.path, input);
+      const schema = await loadSchema(native.path);
+      const next = { ...config, name: "Readable project" };
+      const edited = editSchemaText(schema, {
+        action: "config",
+        fingerprint: schema.fingerprint,
+        config: next,
+      });
+      expect(parseSchema(edited).config).toEqual(next);
+      expect(edited).toContain("# @vaultConfig={\r\n");
+      expect(edited).not.toMatch(/(?<!\r)\n/);
+      expect(edited.endsWith(definition.replaceAll("\n", "\r\n"))).toBe(true);
+      if (input === legacy.replaceAll("\n", "\r\n"))
+        expect(edited).toContain("# @defaultSensitive=false # custom setting");
+    }
   });
   it("round trips literal interpolation characters and multiline defaults", () => {
     const value = "quotes ' and \\ and $VAR\nsecond line";
