@@ -252,9 +252,21 @@ and are cleared when hidden, on project changes, or after connection errors.
 Labels consistently show **Inherits schema default**, **Inherits dev** (or the
 actual source environment), and **Explicit override**.
 
-Click an environment cell to edit inline. Use **Save** or Ctrl/Cmd+Enter to save,
-or **Cancel** / Escape to discard. Editing an inherited cell creates an override
-in the selected environment. Public schema defaults also support inline edits.
+The matrix uses React Data Grid with a frozen variable column on wide screens, resizable
+columns, virtualized rows, and keyboard cell navigation. Click a value, or press
+Enter/F2 on a selected cell, to edit. Arrow keys move between cells. Use **Save**
+or Ctrl/Cmd+Enter to save, or **Cancel** / Escape to discard. Tab from the value
+field saves a changed draft and moves to the next editable cell; Shift+Tab moves
+backward. Editing an inherited cell creates an override in the selected
+environment. Public schema defaults also support inline edits.
+
+Saves run in the background with a spinner in the affected field. You can keep
+editing another field, search/filter, hide values, or switch projects while a
+save runs. A background refresh preserves the active draft. Errors appear in the
+field with a retry action; reopening the editor restores its failed draft for
+correction. Pending sensitive values remain masked when visibility is turned
+off. Every save still validates the schema fingerprint and item versions; writes
+are not automatically retried.
 Use a cell's details icon for notes, definition editing, renaming, deletion, and
 override removal. Existing notes are
 preserved unless edited. Reveal the current value to edit existing notes. An
@@ -273,7 +285,8 @@ To deliberately clear a value, select **Set an explicit empty value**; use
 **Adopt into schema** registers unmanaged items without copying their values.
 **Project settings** edits `@vaultConfig` in the schema header.
 
-The UI uses shadcn/ui components, Radix primitives, Tailwind CSS, and Lucide icons.
+The UI uses React Data Grid for the matrix and shadcn/ui components, Radix
+primitives, Tailwind CSS, and Lucide icons for its controls.
 Revealing the matrix keeps raw editable values in browser memory, so opening an
 inline editor reuses the loaded value. Search, filters, and hide/show interaction
 run locally. Browser values are never stored in localStorage or on disk.
@@ -342,6 +355,11 @@ If interrupted, `.local/ui-test-recovery.json` identifies only that test fixture
 explicit empty values, drawer focus, mobile layout, CSP, and inheritance
 labels, cancellation, and late-response masking using a memory provider. It
 requires local Chrome and never accesses 1Password.
+
+`npm run test:grid` deliberately delays and rejects requests to verify field
+spinners, concurrent edits, draft preservation, masking during saves, keyboard
+navigation, failed-value recovery, and project isolation. It also uses a memory
+provider and never contacts 1Password.
 
 The normal test suite uses a memory provider and never mutates live vaults.
 To explicitly test the local desktop SDK with dedicated disposable vaults:

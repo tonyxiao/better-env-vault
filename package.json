@@ -23,7 +23,8 @@
     "test:cleanup": "tsc && node dist/scripts/cleanup-local.js",
     "start": "node bin/envault.mjs",
     "test:ui": "tsx scripts/test-ui.ts",
-    "test:matrix": "tsx scripts/test-matrix.ts"
+    "test:matrix": "tsx scripts/test-matrix.ts",
+    "test:grid": "tsx scripts/test-grid.ts"
   },
   "engines": {
     "node": ">=22"
@@ -39,6 +40,7 @@
     "lucide-react": "1.52.0",
     "radix-ui": "1.7.0",
     "react": "19.2.0",
+    "react-data-grid": "7.0.0-beta.61",
     "react-dom": "19.2.0",
     "tailwind-merge": "3.7.0",
     "varlock": "1.21.1",

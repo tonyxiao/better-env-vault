@@ -35,22 +35,29 @@ try {
     if (url.searchParams.get("fresh") === "1") freshLoads++;
   });
   await page.goto(app.launchUrl);
+  async function settled() {
+    await page.getByRole("status").filter({ hasText: "Saved." }).waitFor();
+  }
   await page
     .getByRole("button", { name: "Edit TOKEN in prod", exact: true })
     .waitFor();
   assert.ok(
     !(await page.locator("body").innerText()).includes("prod-fixture-value"),
   );
+  await page
+    .getByRole("button", { name: "Edit TOKEN in staging", exact: true })
+    .getByText("Inherits dev", { exact: true })
+    .waitFor();
   assert.match(
-    await page
+    (await page
       .getByRole("button", { name: "Edit TOKEN in staging", exact: true })
-      .innerText(),
+      .textContent()) ?? "",
     /Inherits dev/,
   );
   assert.match(
-    await page
+    (await page
       .getByRole("button", { name: "Edit LABEL in dev", exact: true })
-      .innerText(),
+      .textContent()) ?? "",
     /Inherits schema default/,
   );
   await page
@@ -114,6 +121,7 @@ try {
   await value.fill("inline-updated-fixture");
   await form.getByRole("button", { name: "Save", exact: true }).click();
   await form.waitFor({ state: "hidden" });
+  await settled();
   assert.equal(
     (await provider.readVault(config.environments.prod.vault))[0].value,
     "inline-updated-fixture",
@@ -139,6 +147,7 @@ try {
   await inherited.getByRole("textbox").fill("staging-override");
   await inherited.getByRole("button", { name: "Save", exact: true }).click();
   await inherited.waitFor({ state: "hidden" });
+  await settled();
   assert.equal(
     (await provider.readVault(config.environments.staging.vault))[0].value,
     "staging-override",
@@ -161,6 +170,13 @@ try {
     .getByRole("button", { name: "Reveal inline value", exact: true })
     .waitFor();
   assert.equal(await form.getByRole("textbox").count(), 0);
+  assert.equal(
+    await page
+      .getByRole("button", { name: "Reveal all values", exact: true })
+      .evaluate((element) => element === document.activeElement),
+    true,
+    "Hiding values must not steal keyboard focus from the visibility toggle.",
+  );
   await form
     .getByRole("button", { name: "Reveal inline value", exact: true })
     .click();
@@ -233,6 +249,7 @@ try {
     .getByRole("button", { name: "Create secret", exact: true })
     .click();
   await dialog.waitFor({ state: "hidden" });
+  await settled();
   assert.equal(
     (await provider.readVault(config.environments.dev.vault)).find(
       (v) => v.name === "NEW_FIXTURE",
@@ -251,6 +268,7 @@ try {
     .getByRole("button", { name: "Save change", exact: true })
     .click();
   await dialog.waitFor({ state: "hidden" });
+  await settled();
   await details.click();
   await dialog
     .getByRole("checkbox", { name: "Set an explicit empty value", exact: true })
@@ -259,6 +277,7 @@ try {
     .getByRole("button", { name: "Save change", exact: true })
     .click();
   await dialog.waitFor({ state: "hidden" });
+  await settled();
   assert.equal(
     (await provider.readVault(config.environments.prod.vault)).find(
       (v) => v.name === "NEW_FIXTURE",
@@ -270,6 +289,7 @@ try {
     .getByRole("button", { name: "Remove override", exact: true })
     .click();
   await dialog.waitFor({ state: "hidden" });
+  await settled();
   assert.equal(
     (await provider.readVault(config.environments.prod.vault)).find(
       (v) => v.name === "NEW_FIXTURE",
@@ -279,6 +299,14 @@ try {
   await details.click();
   await page.keyboard.press("Escape");
   await dialog.waitFor({ state: "hidden" });
+  await page.waitForFunction(() =>
+    [...document.querySelectorAll("button")].some(
+      (button) =>
+        button.getAttribute("aria-label") ===
+          "Details for NEW_FIXTURE in prod" &&
+        button === document.activeElement,
+    ),
+  );
   assert.equal(
     await details.evaluate((element) => element === document.activeElement),
     true,
@@ -300,6 +328,7 @@ try {
     .getByRole("button", { name: "Delete everywhere", exact: true })
     .click();
   await dialog.waitFor({ state: "hidden" });
+  await settled();
   assert.ok(
     !Object.values(provider.vaults)
       .flat()

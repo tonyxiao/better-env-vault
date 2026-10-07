@@ -15,7 +15,7 @@ import {
   TooltipContent,
   TooltipProvider,
 } from "./components/ui/tooltip.js";
-import { Info, Plus, RefreshCw, X } from "lucide-react";
+import { LoaderCircle, Plus, RefreshCw, X } from "lucide-react";
 import { Button } from "./components/ui/button.js";
 import { Input } from "./components/ui/input.js";
 import { Textarea } from "./components/ui/textarea.js";
@@ -23,36 +23,28 @@ import { Checkbox } from "./components/ui/checkbox.js";
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type FormEvent,
 } from "react";
 import { createRoot } from "react-dom/client";
-import type { ProjectConfig } from "../../../packages/core/src/schema.js";
-import type {
-  Resolution,
-  ResolvedVariable,
-} from "../../../packages/core/src/resolver.js";
+import type { ResolvedVariable } from "../../../packages/core/src/resolver.js";
 import "./style.css";
-import { EyeIcon, InlineEditor, originLabel } from "./MatrixCell.js";
+import { EyeIcon, originLabel } from "./MatrixCell.js";
+import { MatrixGrid } from "./MatrixGrid.js";
+import {
+  fieldKey,
+  operationField,
+  type Cell,
+  type Matrix,
+  type SaveOperation,
+} from "./matrix-model.js";
 
 interface Project {
   id: string;
   name: string;
   schemaPath: string;
-}
-interface Matrix {
-  fingerprint: string;
-  config: ProjectConfig;
-  schemaPath: string;
-  environments: string[];
-  resolutions: Resolution[];
-  versions: Record<string, Record<string, number | null>>;
-  editableValues?: Record<string, Record<string, string | undefined>>;
-}
-interface Cell {
-  environment: string;
-  variable: ResolvedVariable;
 }
 function maskedMatrix(matrix: Matrix): Matrix {
   const { editableValues: _editableValues, ...metadata } = matrix;
@@ -98,7 +90,13 @@ function App() {
   const [cell, setCell] = useState<Cell>();
   const [modal, setModal] = useState<"add" | "settings">();
   const [addName, setAddName] = useState("");
-  const [inline, setInline] = useState<Cell>();
+  const [gridResetEpoch, setGridResetEpoch] = useState(0);
+  const [operations, setOperations] = useState<Record<string, SaveOperation>>(
+    {},
+  );
+  const pending = useRef(new Set<string>());
+  const projectRef = useRef(project);
+  projectRef.current = project;
   const [revealedMatrix, setRevealedMatrix] = useState<Matrix>();
   const [allVisible, setAllVisible] = useState(false);
   const [revealingAll, setRevealingAll] = useState(false);
@@ -117,7 +115,8 @@ function App() {
     setModal(undefined);
     setError("");
     setNotice("");
-    setInline(undefined);
+    setOperations({});
+    setGridResetEpoch((epoch) => epoch + 1);
     setRevealedMatrix(undefined);
     setAllVisible(false);
     setRevealingAll(false);
@@ -170,10 +169,10 @@ function App() {
   }, [disconnect]);
 
   const refresh = useCallback(
-    async (fresh = false) => {
+    async (fresh = false, quiet = false) => {
       if (!project) return;
       const id = ++loadId.current;
-      setBusy(true);
+      if (!quiet) setBusy(true);
       setError("");
       const generation = visibilityGeneration.current;
       try {
@@ -208,14 +207,14 @@ function App() {
           response = await request<Matrix>(
             `/api/matrix?project=${encodeURIComponent(project)}${fresh ? "&fresh=1" : ""}`,
           );
-        if (
-          loadId.current === id &&
-          visibilityGeneration.current === generation
-        ) {
+        if (loadId.current === id) {
           const masked = maskedMatrix(response);
           matrixRef.current = masked;
           setMatrix(masked);
-          if (visibleIntent.current) {
+          if (
+            visibleIntent.current &&
+            visibilityGeneration.current === generation
+          ) {
             setRevealedMatrix(response);
             setAllVisible(true);
           }
@@ -231,7 +230,7 @@ function App() {
           else setError((error as Error).message);
         }
       } finally {
-        if (loadId.current === id) setBusy(false);
+        if (!quiet && loadId.current === id) setBusy(false);
       }
     },
     [project, disconnect],
@@ -240,7 +239,7 @@ function App() {
     setMatrix(undefined);
     setCell(undefined);
     setModal(undefined);
-    setInline(undefined);
+    setGridResetEpoch((epoch) => epoch + 1);
     setRevealedMatrix(undefined);
     setAllVisible(false);
     setRevealingAll(false);
@@ -254,31 +253,66 @@ function App() {
   }, [refresh]);
 
   async function mutate(payload: Record<string, unknown>): Promise<boolean> {
-    if (!matrix) return false;
-    setBusy(true);
+    const current = matrixRef.current;
+    if (!current) return false;
+    const targetProject = project;
+    const { name, environment } = operationField(payload);
+    const key = fieldKey(targetProject, name, environment);
+    if (pending.current.has(key)) return false;
+    pending.current.add(key);
+    const operation: SaveOperation = {
+      project: targetProject,
+      name,
+      environment,
+      status: "saving",
+      payload,
+    };
+    setOperations((previous) => ({ ...previous, [key]: operation }));
+    setCell(undefined);
+    setModal(undefined);
     setError("");
     setNotice("");
     try {
-      await request(`/api/edit?project=${encodeURIComponent(project)}`, {
+      await request(`/api/edit?project=${encodeURIComponent(targetProject)}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "X-Bev-Mutation": token.current,
         },
-        body: JSON.stringify({ fingerprint: matrix.fingerprint, ...payload }),
+        body: JSON.stringify({ fingerprint: current.fingerprint, ...payload }),
       });
-      setCell(undefined);
-      setModal(undefined);
-      setInline(undefined);
-      setNotice("Saved. Values are available on the next environment load.");
-      await refresh();
+      if (projectRef.current === targetProject) {
+        await refresh(false, true);
+        if (projectRef.current === targetProject)
+          setNotice(
+            "Saved. Values are available on the next environment load.",
+          );
+      }
+      setOperations((previous) => {
+        const next = { ...previous };
+        delete next[key];
+        return next;
+      });
       return true;
     } catch (error) {
-      if (error instanceof ApiError && error.code === "session") disconnect();
-      else setError((error as Error).message);
+      if (error instanceof ApiError && error.code === "session") {
+        disconnect();
+        return false;
+      }
+      const message =
+        error instanceof Error ? error.message : "The value was not saved.";
+      setOperations((previous) => ({
+        ...previous,
+        [key]: { ...operation, status: "error", error: message },
+      }));
+      if (
+        projectRef.current === targetProject &&
+        !["set", "remove", "default"].includes(String(payload.action))
+      )
+        setError(message);
       return false;
     } finally {
-      setBusy(false);
+      pending.current.delete(key);
     }
   }
   async function reveal(environment: string, name: string) {
@@ -354,23 +388,37 @@ function App() {
   const displayMatrix = allVisible && revealedMatrix ? revealedMatrix : matrix;
 
   const rows = displayMatrix?.resolutions[0]?.variables ?? [];
-  const visible = rows.filter((row) => {
-    if (
-      !`${row.name} ${row.description}`
-        .toLowerCase()
-        .includes(search.toLowerCase())
-    )
-      return false;
-    const cells = matrix!.resolutions.map(
-      (r) => r.variables.find((v) => v.name === row.name)!,
-    );
-    return (
-      filter === "all" ||
-      (filter === "missing" && cells.some((v) => v.state === "missing")) ||
-      (filter === "invalid" && cells.some((v) => !v.valid)) ||
-      (filter === "overrides" && cells.some((v) => v.state === "explicit"))
-    );
-  });
+  const visible = useMemo(() => {
+    const lookups =
+      filter === "all"
+        ? []
+        : (matrix?.resolutions.map(
+            (resolution) =>
+              new Map(
+                resolution.variables.map((variable) => [
+                  variable.name,
+                  variable,
+                ]),
+              ),
+          ) ?? []);
+    return rows.filter((row) => {
+      if (
+        !`${row.name} ${row.description}`
+          .toLowerCase()
+          .includes(search.toLowerCase())
+      )
+        return false;
+      if (filter === "all") return true;
+      const cells = lookups.map((lookup) => lookup.get(row.name)!);
+      return (
+        (filter === "missing" &&
+          cells.some((variable) => variable.state === "missing")) ||
+        (filter === "invalid" && cells.some((variable) => !variable.valid)) ||
+        (filter === "overrides" &&
+          cells.some((variable) => variable.state === "explicit"))
+      );
+    });
+  }, [rows, matrix, search, filter]);
   const unmanaged = matrix
     ? [
         ...new Map(
@@ -435,7 +483,7 @@ function App() {
             disabled={busy || !matrix}
             onClick={() => {
               setCell(undefined);
-              setInline(undefined);
+              setGridResetEpoch((epoch) => epoch + 1);
               void refresh(true);
             }}
           >
@@ -497,7 +545,10 @@ function App() {
               id="search"
               placeholder="Search variables or descriptions…"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setGridResetEpoch((epoch) => epoch + 1);
+              }}
             />
           </div>
           <label className="filter">
@@ -505,7 +556,10 @@ function App() {
             <NativeSelect
               aria-label="Filter variables"
               value={filter}
-              onChange={(e) => setFilter(e.target.value)}
+              onChange={(e) => {
+                setFilter(e.target.value);
+                setGridResetEpoch((epoch) => epoch + 1);
+              }}
             >
               <NativeSelectOption value="all">All variables</NativeSelectOption>
               <NativeSelectOption value="missing">
@@ -560,6 +614,40 @@ function App() {
             <Plus aria-hidden="true" /> Add variable
           </Button>
         </div>
+        {Object.values(operations)
+          .filter(
+            (operation) =>
+              operation.project === project &&
+              ["add", "definition"].includes(operation.environment),
+          )
+          .map((operation) => (
+            <div
+              key={fieldKey(project, operation.name, operation.environment)}
+              className="operation-notice"
+              role={operation.status === "error" ? "alert" : "status"}
+            >
+              {operation.status === "saving" ? (
+                <>
+                  <LoaderCircle
+                    className="size-4 animate-spin"
+                    aria-hidden="true"
+                  />{" "}
+                  Saving {operation.name}…
+                </>
+              ) : (
+                <>
+                  <span>{operation.error}</span>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() => void mutate(operation.payload)}
+                  >
+                    Retry save
+                  </Button>
+                </>
+              )}
+            </div>
+          ))}
         {busy ? (
           <p role="status" className="loading">
             Connecting to 1Password…
@@ -567,221 +655,21 @@ function App() {
         ) : null}
         {matrix ? (
           <section className="matrix-panel" aria-label="Environment matrix">
-            <div className="matrix-scroll">
-              <table>
-                <thead>
-                  <tr>
-                    <th className="variable-heading">
-                      Variable <span>{rows.length}</span>
-                    </th>
-                    <th>
-                      <span className="column-label">Base layer</span>Schema
-                      default
-                    </th>
-                    {matrix.environments.map((env) => (
-                      <th key={env}>
-                        <span className="column-label">
-                          {matrix.config.environments[env].extends
-                            ? `Inherits ${matrix.config.environments[env].extends}`
-                            : "Inherits schema default"}
-                        </span>
-                        {env}
-                        <span className="env-dot" />
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {visible.map((row) => (
-                    <tr key={row.name}>
-                      <th scope="row">
-                        <code>{row.name}</code>
-                        <p>{row.description || "No description"}</p>
-                        <div className="badges">
-                          <span>{row.type}</span>
-                          {row.required ? <span>required</span> : null}
-                          <span>{row.sensitive ? "sensitive" : "public"}</span>
-                        </div>
-                      </th>
-                      <td className="default-cell">
-                        {inline?.environment === "schema" &&
-                        inline.variable.name === row.name ? (
-                          <InlineEditor
-                            variable={inline.variable}
-                            environment="schema"
-                            busy={busy}
-                            hideEpoch={hideEpoch}
-                            initialValue={{ value: row.defaultValue }}
-                            onLoad={() =>
-                              Promise.resolve({
-                                editableValue: row.defaultValue,
-                              })
-                            }
-                            onSave={(value) =>
-                              mutate({
-                                action: "default",
-                                name: row.name,
-                                value,
-                                versions: matrix.versions[row.name],
-                              })
-                            }
-                            onCancel={() => setInline(undefined)}
-                          />
-                        ) : (
-                          <>
-                            <span>
-                              {row.sensitive && !allVisible
-                                ? row.hasDefault
-                                  ? "••••••••"
-                                  : "No default"
-                                : row.defaultValue === undefined
-                                  ? "No default"
-                                  : row.defaultValue === ""
-                                    ? "(empty)"
-                                    : row.defaultValue}
-                            </span>
-                            {!row.sensitive ? (
-                              <Button
-                                variant="link"
-                                className="text-button"
-                                aria-label={`Edit default for ${row.name}`}
-                                disabled={busy || !row.editable}
-                                title={
-                                  !row.editable
-                                    ? "Expression defaults are read-only"
-                                    : undefined
-                                }
-                                onClick={() =>
-                                  setInline({
-                                    environment: "schema",
-                                    variable: row,
-                                  })
-                                }
-                              >
-                                Edit default
-                              </Button>
-                            ) : null}
-                          </>
-                        )}
-                      </td>
-                      {displayMatrix!.resolutions.map((resolution) => {
-                        const v = resolution.variables.find(
-                          (v) => v.name === row.name,
-                        )!;
-                        return (
-                          <td key={resolution.environment}>
-                            {inline?.environment === resolution.environment &&
-                            inline.variable.name === v.name ? (
-                              <InlineEditor
-                                variable={inline.variable}
-                                environment={inline.environment}
-                                busy={busy}
-                                hideEpoch={hideEpoch}
-                                initialValue={
-                                  allVisible && revealedMatrix
-                                    ? {
-                                        value:
-                                          revealedMatrix.editableValues?.[
-                                            resolution.environment
-                                          ]?.[v.name] ?? v.value,
-                                      }
-                                    : v.state === "missing" ||
-                                        (v.state === "default" && !v.sensitive)
-                                      ? { value: v.value }
-                                      : undefined
-                                }
-                                onLoad={() =>
-                                  reveal(resolution.environment, v.name)
-                                }
-                                onSave={(value) =>
-                                  mutate({
-                                    action: "set",
-                                    name: v.name,
-                                    environment: resolution.environment,
-                                    value,
-                                    versions: matrix.versions[v.name],
-                                  })
-                                }
-                                onCancel={() => setInline(undefined)}
-                                onRemove={() =>
-                                  mutate({
-                                    action: "remove",
-                                    name: v.name,
-                                    environment: resolution.environment,
-                                    versions: matrix.versions[v.name],
-                                  })
-                                }
-                              />
-                            ) : (
-                              <div className="matrix-cell">
-                                <Button
-                                  variant="ghost"
-                                  className={`value-cell ${v.state} ${!v.valid ? "invalid" : ""}`}
-                                  disabled={busy}
-                                  aria-label={`Edit ${v.name} in ${resolution.environment}`}
-                                  onClick={() =>
-                                    setInline({
-                                      environment: resolution.environment,
-                                      variable: v,
-                                    })
-                                  }
-                                >
-                                  <span className="value">
-                                    {v.state === "missing"
-                                      ? "Not set"
-                                      : v.sensitive && !allVisible
-                                        ? "••••••••"
-                                        : v.value === ""
-                                          ? "(empty)"
-                                          : v.value}
-                                  </span>
-                                  <span className="origin">
-                                    {!v.valid ? "⚠ Invalid · " : ""}
-                                    {originLabel(v)}
-                                  </span>
-                                </Button>
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="icon-sm"
-                                  className="cell-details"
-                                  disabled={busy}
-                                  aria-label={`Details for ${v.name} in ${resolution.environment}`}
-                                  title="Value details and advanced editing"
-                                  onClick={() => {
-                                    setInline(undefined);
-                                    setCell({
-                                      environment: resolution.environment,
-                                      variable: v,
-                                    });
-                                  }}
-                                >
-                                  <Info aria-hidden="true" />
-                                </Button>
-                              </div>
-                            )}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {!visible.length ? (
-                <div className="empty">
-                  <h2>
-                    {rows.length
-                      ? "No matching variables"
-                      : "Start with a variable"}
-                  </h2>
-                  <p>
-                    {rows.length
-                      ? "Try another search or filter."
-                      : "Add a definition or adopt an existing vault item below."}
-                  </p>
-                </div>
-              ) : null}
-            </div>
+            <MatrixGrid
+              key={project}
+              project={project}
+              matrix={matrix}
+              displayMatrix={displayMatrix!}
+              variables={visible}
+              allVisible={allVisible}
+              busy={busy}
+              hideEpoch={hideEpoch}
+              resetEpoch={gridResetEpoch}
+              operations={operations}
+              onSave={mutate}
+              onReveal={reveal}
+              onDetails={setCell}
+            />
             <footer className="matrix-footer">
               <span>
                 <i className="legend-dot" />
@@ -829,8 +717,10 @@ function App() {
           </section>
         ) : null}
         <p className="footnote">
-          Values refresh on demand. Reload direnv or restart your application
-          after making changes.
+          Arrow keys navigate · Enter/F2 edits · Tab saves · Escape cancels.
+          <br />
+          Saves update the matrix automatically. Reload direnv or restart your
+          application to use new values.
         </p>
       </main>
       {cell && matrix ? (
@@ -871,12 +761,16 @@ function Dialog({
   title,
   onClose,
   children,
+  trigger,
 }: {
   title: string;
   onClose: () => void;
   children: React.ReactNode;
+  trigger?: HTMLElement;
 }) {
-  const previous = useRef(document.activeElement as HTMLElement | null);
+  const previous = useRef(
+    trigger ?? (document.activeElement as HTMLElement | null),
+  );
   return (
     <Sheet
       open
@@ -889,7 +783,17 @@ function Dialog({
         showCloseButton={false}
         onCloseAutoFocus={(event) => {
           event.preventDefault();
-          previous.current?.focus();
+          const label = previous.current?.getAttribute("aria-label");
+          const target = previous.current?.isConnected
+            ? previous.current
+            : label
+              ? [
+                  ...document.querySelectorAll<HTMLElement>(
+                    "button[aria-label]",
+                  ),
+                ].find((button) => button.getAttribute("aria-label") === label)
+              : undefined;
+          target?.focus();
         }}
       >
         <div className="drawer-header">
@@ -958,7 +862,11 @@ function Editor({
   const [sensitive, setSensitive] = useState(v.sensitive);
   const [newName, setNewName] = useState(v.name);
   const [confirmation, setConfirmation] = useState("");
-  const common = { name: v.name, versions: matrix.versions[v.name] };
+  const common = useRef({
+    name: v.name,
+    versions: matrix.versions[v.name],
+    fingerprint: matrix.fingerprint,
+  }).current;
   async function reveal() {
     setRevealing(true);
     setLocalError("");
@@ -1002,7 +910,7 @@ function Editor({
     void onSave(payload);
   }
   return (
-    <Dialog title={v.name} onClose={onClose}>
+    <Dialog title={v.name} onClose={onClose} trigger={cell.trigger}>
       {saveError ? (
         <div role="alert" className="alert error">
           {saveError}

@@ -63,6 +63,9 @@ async function saved() {
 }
 async function editCell(environment: string) {
   await page!
+    .getByRole("textbox", { name: "Search variables", exact: true })
+    .fill(fixture);
+  await page!
     .getByRole("button", {
       name: `Details for ${fixture} in ${environment}`,
       exact: true,
