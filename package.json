@@ -14,7 +14,7 @@
   "scripts": {
     "dev": "tsx packages/cli/src/index.ts",
     "build": "tsc -p tsconfig.build.json && vite build --config apps/web/vite.config.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p apps/web/tsconfig.json --noEmit",
     "test": "vitest run",
     "test:local": "tsc && node dist/scripts/test-local.js",
     "format": "prettier --write packages apps scripts tests docs README.md package.json tsconfig*.json vitest.config.ts .github/workflows/ci.yml",
@@ -30,20 +30,29 @@
   "dependencies": {
     "@1password/sdk": "0.5.0",
     "@env-spec/parser": "0.6.1",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
     "commander": "14.0.2",
+    "get-nonce": "1.0.1",
+    "lucide-react": "1.52.0",
+    "radix-ui": "1.7.0",
     "react": "19.2.0",
     "react-dom": "19.2.0",
+    "tailwind-merge": "3.7.0",
     "varlock": "1.21.1",
     "zod": "4.1.12"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
     "@types/node": "24.10.0",
     "@types/react": "19.2.2",
     "@types/react-dom": "19.2.2",
     "@vitejs/plugin-react": "5.0.4",
     "playwright-core": "1.63.0",
     "prettier": "3.6.2",
+    "tailwindcss": "4.3.3",
     "tsx": "4.20.6",
+    "tw-animate-css": "1.4.0",
     "typescript": "5.9.3",
     "vite": "7.3.7",
     "vitest": "4.1.11"
@@ -52,6 +61,7 @@
     "bin",
     "dist/packages",
     "dist/apps/web/src/server.js",
+    "dist/apps/web/src/snapshot-cache.js",
     "apps/web/dist",
     "README.md",
     "docs/setup.md"

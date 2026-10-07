@@ -116,9 +116,7 @@ try {
     ),
     { mode: 0o600 },
   );
-  await page
-    .getByRole("button", { name: "+ Add variable", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Add variable", exact: true }).click();
   let dialog = page.getByRole("dialog");
   await dialog
     .getByRole("textbox", { name: "Variable name", exact: true })

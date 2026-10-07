@@ -1,3 +1,25 @@
+import { setNonce } from "get-nonce";
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from "./components/ui/native-select.js";
+import {
+  Sheet,
+  SheetContent,
+  SheetTitle,
+  SheetDescription,
+} from "./components/ui/sheet.js";
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+  TooltipProvider,
+} from "./components/ui/tooltip.js";
+import { Info, Plus, RefreshCw, X } from "lucide-react";
+import { Button } from "./components/ui/button.js";
+import { Input } from "./components/ui/input.js";
+import { Textarea } from "./components/ui/textarea.js";
+import { Checkbox } from "./components/ui/checkbox.js";
 import {
   useCallback,
   useEffect,
@@ -147,69 +169,73 @@ function App() {
     };
   }, [disconnect]);
 
-  const refresh = useCallback(async () => {
-    if (!project) return;
-    const id = ++loadId.current;
-    setBusy(true);
-    setError("");
-    const generation = visibilityGeneration.current;
-    try {
-      let response: Matrix;
-      if (visibleIntent.current && matrixRef.current) {
-        try {
-          response = await request<Matrix>(
-            `/api/reveal-all?project=${encodeURIComponent(project)}`,
-            {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "X-Bev-Mutation": token.current,
+  const refresh = useCallback(
+    async (fresh = false) => {
+      if (!project) return;
+      const id = ++loadId.current;
+      setBusy(true);
+      setError("");
+      const generation = visibilityGeneration.current;
+      try {
+        let response: Matrix;
+        if (visibleIntent.current && matrixRef.current) {
+          try {
+            response = await request<Matrix>(
+              `/api/reveal-all?project=${encodeURIComponent(project)}${fresh ? "&fresh=1" : ""}`,
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "X-Bev-Mutation": token.current,
+                },
+                body: JSON.stringify({
+                  fingerprint: matrixRef.current.fingerprint,
+                }),
               },
-              body: JSON.stringify({
-                fingerprint: matrixRef.current.fingerprint,
-              }),
-            },
+            );
+          } catch (error) {
+            if (!(error instanceof ApiError && error.code === "conflict"))
+              throw error;
+            visibleIntent.current = false;
+            setAllVisible(false);
+            setRevealedMatrix(undefined);
+            setHideEpoch((epoch) => epoch + 1);
+            response = await request<Matrix>(
+              `/api/matrix?project=${encodeURIComponent(project)}${fresh ? "&fresh=1" : ""}`,
+            );
+          }
+        } else
+          response = await request<Matrix>(
+            `/api/matrix?project=${encodeURIComponent(project)}${fresh ? "&fresh=1" : ""}`,
           );
-        } catch (error) {
-          if (!(error instanceof ApiError && error.code === "conflict"))
-            throw error;
+        if (
+          loadId.current === id &&
+          visibilityGeneration.current === generation
+        ) {
+          const masked = maskedMatrix(response);
+          matrixRef.current = masked;
+          setMatrix(masked);
+          if (visibleIntent.current) {
+            setRevealedMatrix(response);
+            setAllVisible(true);
+          }
+        }
+      } catch (error) {
+        if (loadId.current === id) {
           visibleIntent.current = false;
           setAllVisible(false);
           setRevealedMatrix(undefined);
           setHideEpoch((epoch) => epoch + 1);
-          response = await request<Matrix>(
-            `/api/matrix?project=${encodeURIComponent(project)}`,
-          );
+          if (error instanceof ApiError && error.code === "session")
+            disconnect();
+          else setError((error as Error).message);
         }
-      } else
-        response = await request<Matrix>(
-          `/api/matrix?project=${encodeURIComponent(project)}`,
-        );
-      if (
-        loadId.current === id &&
-        visibilityGeneration.current === generation
-      ) {
-        const masked = maskedMatrix(response);
-        matrixRef.current = masked;
-        setMatrix(masked);
-        if (visibleIntent.current) {
-          setRevealedMatrix(response);
-          setAllVisible(true);
-        }
+      } finally {
+        if (loadId.current === id) setBusy(false);
       }
-    } catch (error) {
-      if (loadId.current === id) {
-        visibleIntent.current = false;
-        setAllVisible(false);
-        setRevealedMatrix(undefined);
-        setHideEpoch((epoch) => epoch + 1);
-        if (error instanceof ApiError && error.code === "session") disconnect();
-        else setError((error as Error).message);
-      }
-    } finally {
-      if (loadId.current === id) setBusy(false);
-    }
-  }, [project, disconnect]);
+    },
+    [project, disconnect],
+  );
   useEffect(() => {
     setMatrix(undefined);
     setCell(undefined);
@@ -380,9 +406,9 @@ function App() {
               <code>open</code> to open your default browser.
             </p>
             <p>Opening the plain address does not connect a new browser.</p>
-            <button className="secondary" onClick={() => location.reload()}>
+            <Button variant="outline" onClick={() => location.reload()}>
               Retry connection
-            </button>
+            </Button>
           </section>
         </main>
       </div>
@@ -404,17 +430,17 @@ function App() {
               See every override. Know where each value comes from.
             </p>
           </div>
-          <button
-            className="secondary"
+          <Button
+            variant="outline"
             disabled={busy || !matrix}
             onClick={() => {
               setCell(undefined);
               setInline(undefined);
-              void refresh();
+              void refresh(true);
             }}
           >
-            ↻ Refresh
-          </button>
+            <RefreshCw aria-hidden="true" /> Refresh
+          </Button>
         </div>
         {error ? (
           <div role="alert" className="alert error">
@@ -429,7 +455,7 @@ function App() {
         <section className="workspace-bar" aria-label="Project">
           <div>
             <label htmlFor="project">Project</label>
-            <select
+            <NativeSelect
               id="project"
               disabled={busy}
               value={project}
@@ -440,11 +466,11 @@ function App() {
               }}
             >
               {projects.map((p) => (
-                <option value={p.id} key={p.id}>
+                <NativeSelectOption value={p.id} key={p.id}>
                   {p.name}
-                </option>
+                </NativeSelectOption>
               ))}
-            </select>
+            </NativeSelect>
           </div>
           <div className="schema-path">
             <span>Source of truth</span>
@@ -454,20 +480,20 @@ function App() {
                 ".env.schema"}
             </code>
           </div>
-          <button
-            className="secondary"
+          <Button
+            variant="outline"
             disabled={!matrix || busy}
             onClick={() => setModal("settings")}
           >
             Project settings
-          </button>
+          </Button>
         </section>
         <div className="toolbar">
           <div className="search">
             <label className="sr-only" htmlFor="search">
               Search variables
             </label>
-            <input
+            <Input
               id="search"
               placeholder="Search variables or descriptions…"
               value={search}
@@ -476,46 +502,63 @@ function App() {
           </div>
           <label className="filter">
             Show{" "}
-            <select
+            <NativeSelect
               aria-label="Filter variables"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
             >
-              <option value="all">All variables</option>
-              <option value="missing">Missing values</option>
-              <option value="invalid">Invalid values</option>
-              <option value="overrides">Overrides</option>
-            </select>
+              <NativeSelectOption value="all">All variables</NativeSelectOption>
+              <NativeSelectOption value="missing">
+                Missing values
+              </NativeSelectOption>
+              <NativeSelectOption value="invalid">
+                Invalid values
+              </NativeSelectOption>
+              <NativeSelectOption value="overrides">
+                Overrides
+              </NativeSelectOption>
+            </NativeSelect>
           </label>
-          <button
-            type="button"
-            className="secondary visibility-toggle"
-            aria-label={
-              allVisible || revealingAll
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="visibility-toggle"
+                aria-label={
+                  allVisible || revealingAll
+                    ? "Hide all values"
+                    : "Reveal all values"
+                }
+                title={
+                  allVisible || revealingAll
+                    ? "Hide all values"
+                    : "Reveal all values"
+                }
+                aria-pressed={allVisible || revealingAll}
+                aria-busy={revealingAll}
+                disabled={busy || !matrix}
+                onClick={() => void toggleAll()}
+              >
+                <EyeIcon hidden={allVisible || revealingAll} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {allVisible || revealingAll
                 ? "Hide all values"
-                : "Reveal all values"
-            }
-            title={
-              allVisible || revealingAll
-                ? "Hide all values"
-                : "Reveal all values"
-            }
-            aria-pressed={allVisible || revealingAll}
-            aria-busy={revealingAll}
-            disabled={busy || !matrix}
-            onClick={() => void toggleAll()}
-          >
-            <EyeIcon hidden={allVisible || revealingAll} />
-          </button>
-          <button
+                : "Reveal all values"}
+            </TooltipContent>
+          </Tooltip>
+          <Button
             disabled={busy || !matrix}
             onClick={() => {
               setAddName("");
               setModal("add");
             }}
           >
-            + Add variable
-          </button>
+            <Plus aria-hidden="true" /> Add variable
+          </Button>
         </div>
         {busy ? (
           <p role="status" className="loading">
@@ -598,7 +641,8 @@ function App() {
                                     : row.defaultValue}
                             </span>
                             {!row.sensitive ? (
-                              <button
+                              <Button
+                                variant="link"
                                 className="text-button"
                                 aria-label={`Edit default for ${row.name}`}
                                 disabled={busy || !row.editable}
@@ -615,7 +659,7 @@ function App() {
                                 }
                               >
                                 Edit default
-                              </button>
+                              </Button>
                             ) : null}
                           </>
                         )}
@@ -670,7 +714,8 @@ function App() {
                               />
                             ) : (
                               <div className="matrix-cell">
-                                <button
+                                <Button
+                                  variant="ghost"
                                   className={`value-cell ${v.state} ${!v.valid ? "invalid" : ""}`}
                                   disabled={busy}
                                   aria-label={`Edit ${v.name} in ${resolution.environment}`}
@@ -694,9 +739,11 @@ function App() {
                                     {!v.valid ? "⚠ Invalid · " : ""}
                                     {originLabel(v)}
                                   </span>
-                                </button>
-                                <button
+                                </Button>
+                                <Button
                                   type="button"
+                                  variant="ghost"
+                                  size="icon-sm"
                                   className="cell-details"
                                   disabled={busy}
                                   aria-label={`Details for ${v.name} in ${resolution.environment}`}
@@ -709,19 +756,8 @@ function App() {
                                     });
                                   }}
                                 >
-                                  <svg
-                                    aria-hidden="true"
-                                    width="16"
-                                    height="16"
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    strokeWidth="1.7"
-                                  >
-                                    <circle cx="12" cy="12" r="9" />
-                                    <path d="M12 11v6M12 7v2" />
-                                  </svg>
-                                </button>
+                                  <Info aria-hidden="true" />
+                                </Button>
                               </div>
                             )}
                           </td>
@@ -778,8 +814,8 @@ function App() {
               <div key={`${item.environment}:${item.id}`}>
                 <code>{item.name}</code>
                 <span>{item.environment}</span>
-                <button
-                  className="secondary"
+                <Button
+                  variant="outline"
                   disabled={busy}
                   onClick={() => {
                     setAddName(item.name);
@@ -787,7 +823,7 @@ function App() {
                   }}
                 >
                   Adopt into schema
-                </button>
+                </Button>
               </div>
             ))}
           </section>
@@ -840,66 +876,39 @@ function Dialog({
   onClose: () => void;
   children: React.ReactNode;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const previous = document.activeElement as HTMLElement;
-    ref.current
-      ?.querySelector<HTMLElement>("button, input, textarea, select")
-      ?.focus();
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onClose();
-      }
-      if (event.key === "Tab") {
-        const elements = ref.current?.querySelectorAll<HTMLElement>(
-          'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex="0"]',
-        );
-        if (!elements?.length) return;
-        const first = elements[0],
-          last = elements[elements.length - 1];
-        if (event.shiftKey && document.activeElement === first) {
-          event.preventDefault();
-          last.focus();
-        } else if (!event.shiftKey && document.activeElement === last) {
-          event.preventDefault();
-          first.focus();
-        }
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      previous?.focus();
-    };
-  }, [onClose]);
+  const previous = useRef(document.activeElement as HTMLElement | null);
   return (
-    <div
-      className="backdrop"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
+    <Sheet
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
       }}
     >
-      <div
-        ref={ref}
-        className="drawer"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="dialog-title"
+      <SheetContent
+        className="drawer w-full sm:max-w-[520px]"
+        showCloseButton={false}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          previous.current?.focus();
+        }}
       >
         <div className="drawer-header">
-          <h2 id="dialog-title">{title}</h2>
-          <button
-            className="icon-button"
+          <SheetTitle>{title}</SheetTitle>
+          <Button
+            variant="ghost"
+            size="icon"
             aria-label="Close editor"
             onClick={onClose}
           >
-            ×
-          </button>
+            <X />
+          </Button>
         </div>
+        <SheetDescription className="sr-only">
+          Edit values and variable definitions.
+        </SheetDescription>
         {children}
-      </div>
-    </div>
+      </SheetContent>
+    </Sheet>
   );
 }
 
@@ -1018,9 +1027,13 @@ function Editor({
           ].join(" → ")}
         </p>
         {v.state === "inherited" && v.source ? (
-          <button className="text-button" onClick={() => onSource(v.source!)}>
+          <Button
+            variant="link"
+            className="text-button"
+            onClick={() => onSource(v.source!)}
+          >
             Edit source environment: {v.source}
-          </button>
+          </Button>
         ) : null}
       </div>
       {v.errors.length ? (
@@ -1037,7 +1050,8 @@ function Editor({
           {revealed !== undefined ? (
             <>
               <pre>{revealed || "(empty)"}</pre>
-              <button
+              <Button
+                variant="link"
                 className="text-button"
                 onClick={() => {
                   setRevealed(undefined);
@@ -1046,37 +1060,48 @@ function Editor({
                 }}
               >
                 Hide value
-              </button>
+              </Button>
             </>
           ) : (
-            <button
-              className="secondary"
+            <Button
+              variant="outline"
               disabled={revealing || busy}
               onClick={() => void reveal()}
             >
               {revealing ? "Revealing…" : "Reveal current value"}
-            </button>
+            </Button>
           )}
         </div>
       ) : null}
       <form onSubmit={submit}>
         <label>
           Change
-          <select value={action} onChange={(e) => setAction(e.target.value)}>
+          <NativeSelect
+            value={action}
+            onChange={(e) => setAction(e.target.value)}
+          >
             {cell.environment !== "schema" ? (
-              <option value="set">
+              <NativeSelectOption value="set">
                 {v.state === "explicit"
                   ? "Replace override"
                   : "Create override here"}
-              </option>
+              </NativeSelectOption>
             ) : null}
             {!v.sensitive ? (
-              <option value="default">Edit schema default</option>
+              <NativeSelectOption value="default">
+                Edit schema default
+              </NativeSelectOption>
             ) : null}
-            <option value="definition">Edit definition</option>
-            <option value="rename">Rename everywhere</option>
-            <option value="delete">Delete everywhere</option>
-          </select>
+            <NativeSelectOption value="definition">
+              Edit definition
+            </NativeSelectOption>
+            <NativeSelectOption value="rename">
+              Rename everywhere
+            </NativeSelectOption>
+            <NativeSelectOption value="delete">
+              Delete everywhere
+            </NativeSelectOption>
+          </NativeSelect>
         </label>
         {action === "set" || action === "default" ? (
           <>
@@ -1084,7 +1109,7 @@ function Editor({
               {action === "set"
                 ? `New value in ${cell.environment}`
                 : "Default shared by every environment"}
-              <textarea
+              <Textarea
                 aria-label="New value"
                 rows={5}
                 autoComplete="off"
@@ -1105,12 +1130,11 @@ function Editor({
             </label>
             {action === "set" ? (
               <label className="checkbox">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={explicitEmpty}
-                  onChange={(e) => {
-                    setExplicitEmpty(e.target.checked);
-                    if (e.target.checked) {
+                  onCheckedChange={(checked) => {
+                    setExplicitEmpty(checked === true);
+                    if (checked === true) {
                       setValue("");
                       setValueTouched(true);
                     } else if (value === "") setValueTouched(false);
@@ -1127,7 +1151,7 @@ function Editor({
             {action === "set" ? (
               <label>
                 Notes for this override
-                <textarea
+                <Textarea
                   rows={3}
                   placeholder={
                     notes === undefined
@@ -1147,28 +1171,26 @@ function Editor({
           <>
             <label>
               Description
-              <textarea
+              <Textarea
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
               />
             </label>
             <label>
               Type
-              <input value={type} onChange={(e) => setType(e.target.value)} />
+              <Input value={type} onChange={(e) => setType(e.target.value)} />
             </label>
             <label className="checkbox">
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={required}
-                onChange={(e) => setRequired(e.target.checked)}
+                onCheckedChange={(checked) => setRequired(checked === true)}
               />
               Required
             </label>
             <label className="checkbox">
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={sensitive}
-                onChange={(e) => setSensitive(e.target.checked)}
+                onCheckedChange={(checked) => setSensitive(checked === true)}
               />
               Sensitive
             </label>
@@ -1176,7 +1198,7 @@ function Editor({
         ) : action === "rename" ? (
           <label>
             New variable name
-            <input
+            <Input
               required
               pattern="[A-Za-z_][A-Za-z0-9_]*"
               value={newName}
@@ -1191,7 +1213,7 @@ function Editor({
             </p>
             <label>
               Type {v.name} to confirm
-              <input
+              <Input
                 value={confirmation}
                 onChange={(e) => setConfirmation(e.target.value)}
                 autoComplete="off"
@@ -1200,15 +1222,15 @@ function Editor({
           </>
         )}
         <div className="form-actions">
-          <button
+          <Button
             type="button"
-            className="secondary"
+            variant="outline"
             disabled={busy}
             onClick={onClose}
           >
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
             disabled={
               busy ||
               (action === "set" &&
@@ -1218,14 +1240,14 @@ function Editor({
               (action === "delete" && confirmation !== v.name) ||
               (action === "default" && !v.editable)
             }
-            className={action === "delete" ? "danger" : ""}
+            variant={action === "delete" ? "destructive" : "default"}
           >
             {busy
               ? "Saving…"
               : action === "delete"
                 ? "Delete everywhere"
                 : "Save change"}
-          </button>
+          </Button>
         </div>
       </form>
       {v.state === "explicit" && cell.environment !== "schema" ? (
@@ -1235,8 +1257,8 @@ function Editor({
             Remove this override to use the parent environment or schema
             default.
           </p>
-          <button
-            className="secondary"
+          <Button
+            variant="outline"
             disabled={busy}
             onClick={() =>
               void onSave({
@@ -1247,7 +1269,7 @@ function Editor({
             }
           >
             Remove override
-          </button>
+          </Button>
         </div>
       ) : null}
     </Dialog>
@@ -1346,7 +1368,7 @@ function ProjectDialog({
         {mode === "settings" ? (
           <label>
             Schema project settings
-            <textarea
+            <Textarea
               className="config-editor"
               rows={18}
               value={config}
@@ -1358,7 +1380,7 @@ function ProjectDialog({
           <>
             <label>
               Variable name
-              <input
+              <Input
                 required
                 pattern="[A-Za-z_][A-Za-z0-9_]*"
                 value={name}
@@ -1367,36 +1389,35 @@ function ProjectDialog({
             </label>
             <label>
               Description
-              <textarea
+              <Textarea
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
               />
             </label>
             <label>
               Type
-              <input value={type} onChange={(e) => setType(e.target.value)} />
+              <Input value={type} onChange={(e) => setType(e.target.value)} />
             </label>
             <label className="checkbox">
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={required}
-                onChange={(e) => setRequired(e.target.checked)}
+                onCheckedChange={(checked) => setRequired(checked === true)}
               />
               Required
             </label>
             <label className="checkbox">
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={sensitive}
-                onChange={(e) => setSensitive(e.target.checked)}
+                onCheckedChange={(checked) => setSensitive(checked === true)}
               />
               Sensitive
             </label>
             <label className="checkbox">
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={createWithValue}
-                onChange={(e) => setCreateWithValue(e.target.checked)}
+                onCheckedChange={(checked) =>
+                  setCreateWithValue(checked === true)
+                }
               />
               Set an initial environment value
             </label>
@@ -1405,20 +1426,20 @@ function ProjectDialog({
                 <legend>Initial value</legend>
                 <label>
                   Environment
-                  <select
+                  <NativeSelect
                     value={environment}
                     onChange={(e) => setEnvironment(e.target.value)}
                   >
                     {matrix.environments.map((env) => (
-                      <option key={env} value={env}>
+                      <NativeSelectOption key={env} value={env}>
                         {env}
-                      </option>
+                      </NativeSelectOption>
                     ))}
-                  </select>
+                  </NativeSelect>
                 </label>
                 <label>
                   Secret value
-                  <textarea
+                  <Textarea
                     aria-label="Secret value"
                     rows={5}
                     autoComplete="off"
@@ -1431,19 +1452,18 @@ function ProjectDialog({
                   />
                 </label>
                 <label className="checkbox">
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={explicitEmpty}
-                    onChange={(e) => {
-                      setExplicitEmpty(e.target.checked);
-                      if (e.target.checked) setInitialValue("");
+                    onCheckedChange={(checked) => {
+                      setExplicitEmpty(checked === true);
+                      if (checked === true) setInitialValue("");
                     }}
                   />
                   Use an explicit empty value
                 </label>
                 <label>
                   Notes
-                  <textarea
+                  <Textarea
                     aria-label="Initial value notes"
                     value={initialNotes}
                     onChange={(e) => setInitialNotes(e.target.value)}
@@ -1454,10 +1474,10 @@ function ProjectDialog({
           </>
         )}
         <div className="form-actions">
-          <button type="button" className="secondary" onClick={onClose}>
+          <Button type="button" variant="outline" onClick={onClose}>
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
             disabled={
               busy ||
               (mode === "add" &&
@@ -1471,11 +1491,20 @@ function ProjectDialog({
               : mode === "add" && !initialName
                 ? "Create secret"
                 : "Save"}
-          </button>
+          </Button>
         </div>
       </form>
     </Dialog>
   );
 }
 
-createRoot(document.getElementById("root")!).render(<App />);
+const styleNonce = document.querySelector<HTMLMetaElement>(
+  'meta[name="bev-style-nonce"]',
+)?.content;
+if (styleNonce) setNonce(styleNonce);
+
+createRoot(document.getElementById("root")!).render(
+  <TooltipProvider>
+    <App />
+  </TooltipProvider>,
+);

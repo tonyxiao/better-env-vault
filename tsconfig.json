@@ -18,5 +18,6 @@
     "apps/**/*.tsx",
     "scripts/**/*.ts",
     "tests/**/*.ts"
-  ]
+  ],
+  "exclude": ["apps/web/src", "apps/web/vite.config.ts"]
 }

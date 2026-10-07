@@ -349,3 +349,110 @@ it("protects matrix reads, reveal, mutations, launch replay, and filesystem boun
     await app.close();
   }
 });
+
+it("caches UI reads, bypasses on refresh, and invalidates after edits while masking secrets", async () => {
+  const schema = await fixture("# @optional\nTOKEN=\n");
+  const provider = new MemoryProvider();
+  await provider.save(
+    config.environments.dev.vault,
+    "TOKEN",
+    "fixture-before",
+    "",
+  );
+  let reads = 0;
+  const readVault = provider.readVault.bind(provider);
+  provider.readVault = async (vault) => {
+    reads++;
+    return readVault(vault);
+  };
+  const app = await startServer({ schemas: [schema.path], provider });
+  try {
+    const session = await fetch(app.url + "/api/session", {
+      method: "POST",
+      headers: { Origin: app.url, "Content-Type": "application/json" },
+      body: JSON.stringify({ token: app.bootstrap }),
+    });
+    const cookie = session.headers.get("set-cookie")!.split(";")[0];
+    const projects = await (
+      await fetch(app.url + "/api/projects", { headers: { Cookie: cookie } })
+    ).json();
+    const headers = {
+      Cookie: cookie,
+      Origin: app.url,
+      "Content-Type": "application/json",
+      "X-Bev-Mutation": projects.mutationToken,
+    };
+    const matrix = () => fetch(app.url + "/api/matrix?project=0", { headers });
+    const initial = await (await matrix()).json();
+    expect(reads).toBe(3);
+    const revealed = await (
+      await fetch(app.url + "/api/reveal-all?project=0", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ fingerprint: initial.fingerprint }),
+      })
+    ).text();
+    expect(revealed).toContain("fixture-before");
+    expect(reads).toBe(3);
+    expect(await (await matrix()).text()).not.toContain("fixture-before");
+    expect(reads).toBe(3);
+    await fetch(app.url + "/api/matrix?project=0&fresh=1", { headers });
+    expect(reads).toBe(6);
+    const edited = await fetch(app.url + "/api/edit?project=0", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        action: "set",
+        name: "TOKEN",
+        environment: "dev",
+        value: "fixture-after",
+        fingerprint: initial.fingerprint,
+        versions: initial.versions.TOKEN,
+      }),
+    });
+    expect(edited.status).toBe(200);
+    const afterValidation = reads;
+    expect(await (await matrix()).text()).not.toContain("fixture-after");
+    expect(reads).toBe(afterValidation + 3);
+    const updated = await (
+      await fetch(app.url + "/api/reveal-all?project=0", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ fingerprint: initial.fingerprint }),
+      })
+    ).text();
+    expect(updated).toContain("fixture-after");
+    expect(updated).not.toContain("fixture-before");
+  } finally {
+    await app.close();
+  }
+});
+
+it("uses a fresh style nonce for Radix styles without allowing inline scripts", async () => {
+  const schema = await fixture("# @optional\nTOKEN=\n");
+  const { writeFile } = await import("node:fs/promises");
+  const { dirname, join } = await import("node:path");
+  const directory = dirname(schema.path);
+  await writeFile(
+    join(directory, "index.html"),
+    '<meta name="bev-style-nonce" content="BEV_STYLE_NONCE" />',
+  );
+  const app = await startServer({
+    schemas: [schema.path],
+    provider: new MemoryProvider(),
+    staticDirectory: directory,
+  });
+  try {
+    const first = await fetch(app.url);
+    const html = await first.text();
+    const nonce = html.match(/content="([^"]+)"/)![1];
+    const csp = first.headers.get("content-security-policy")!;
+    expect(csp).toContain(`style-src 'self' 'nonce-${nonce}'`);
+    expect(csp).toContain("script-src 'self';");
+    expect(csp).not.toContain("unsafe-inline");
+    const second = await (await fetch(app.url)).text();
+    expect(second).not.toBe(html);
+  } finally {
+    await app.close();
+  }
+});

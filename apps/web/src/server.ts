@@ -19,6 +19,11 @@ import {
 } from "../../../packages/core/src/resolver.js";
 import { applyEdit } from "../../../packages/core/src/edit.js";
 import { safeError, VaultError } from "../../../packages/core/src/errors.js";
+import { SnapshotCache } from "./snapshot-cache.js";
+import type {
+  VaultSnapshot,
+  Resolution,
+} from "../../../packages/core/src/resolver.js";
 
 const equal = (a: string, b: string) => {
   const left = Buffer.from(a),
@@ -66,6 +71,10 @@ export async function startServer(options: {
     string,
     { fingerprint: string; pending: Promise<Provider> }
   >();
+  const snapshots = new SnapshotCache<{
+    snapshot: VaultSnapshot;
+    resolutions: Resolution[];
+  }>();
   const bootstrap = randomBytes(32).toString("hex");
   const credential = randomBytes(32).toString("hex");
   const mutationToken = randomBytes(32).toString("hex");
@@ -85,12 +94,13 @@ export async function startServer(options: {
   const fallbackStaticDirectory = resolve(serverDir, "../dist");
   const server = createServer(async (request, response) => {
     let activeProject: string | undefined;
+    const styleNonce = randomBytes(24).toString("base64");
     response.setHeader("Cache-Control", "no-store");
     response.setHeader("X-Content-Type-Options", "nosniff");
     response.setHeader("Referrer-Policy", "no-referrer");
     response.setHeader(
       "Content-Security-Policy",
-      "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+      `default-src 'self'; script-src 'self'; style-src 'self' 'nonce-${styleNonce}'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`,
     );
     try {
       const host = request.headers.host;
@@ -204,6 +214,21 @@ export async function startServer(options: {
           providers.set(project.id, cached);
         }
         const provider = await cached.pending;
+        const readSnapshot = () =>
+          snapshots.get(
+            project.id,
+            schema.fingerprint,
+            async () => {
+              const snapshot = await readVaults(schema, provider);
+              const resolutions = await Promise.all(
+                Object.keys(schema.config.environments).map((environment) =>
+                  resolveEnvironment(schema, environment, snapshot),
+                ),
+              );
+              return { snapshot, resolutions };
+            },
+            url.searchParams.get("fresh") === "1",
+          );
         const revealAll =
           url.pathname === "/api/reveal-all" && request.method === "POST";
         if (
@@ -219,13 +244,8 @@ export async function startServer(options: {
                 409,
               );
           }
-          const snapshot = await readVaults(schema, provider);
+          const { snapshot, resolutions } = await readSnapshot();
           const environments = Object.keys(schema.config.environments);
-          const resolutions = await Promise.all(
-            environments.map((env) =>
-              resolveEnvironment(schema, env, snapshot),
-            ),
-          );
           json(response, 200, {
             fingerprint: schema.fingerprint,
             config: schema.config,
@@ -290,12 +310,10 @@ export async function startServer(options: {
               "conflict",
               409,
             );
-          const snapshot = await readVaults(schema, provider);
-          const resolution = await resolveEnvironment(
-            schema,
-            data.environment,
-            snapshot,
-          );
+          const { snapshot, resolutions } = await readSnapshot();
+          const resolution = resolutions.find(
+            (r) => r.environment === data.environment,
+          )!;
           const record = resolution.variables.find(
             (i) => i.name === data.name,
           )!;
@@ -314,11 +332,15 @@ export async function startServer(options: {
           return;
         }
         if (url.pathname === "/api/edit" && request.method === "POST") {
-          json(
-            response,
-            200,
-            await applyEdit(schema.path, provider, await body(request)),
-          );
+          try {
+            json(
+              response,
+              200,
+              await applyEdit(schema.path, provider, await body(request)),
+            );
+          } finally {
+            snapshots.invalidate(project.id);
+          }
           return;
         }
         throw new VaultError("Unknown API endpoint.", "request", 404);
@@ -350,7 +372,12 @@ export async function startServer(options: {
       response.writeHead(200, {
         "Content-Type": types[extname(file)] ?? "application/octet-stream",
       });
-      response.end(contents);
+      // Radix scroll-lock styles receive a per-document nonce; scripts stay self-only.
+      response.end(
+        file === "index.html"
+          ? contents.toString("utf8").replace("BEV_STYLE_NONCE", styleNonce)
+          : contents,
+      );
     } catch (error) {
       // The next explicit request opens a fresh session after expired/failed
       // authorization. Mutations are never automatically retried.
@@ -358,8 +385,10 @@ export async function startServer(options: {
         activeProject &&
         error instanceof VaultError &&
         ["authentication", "provider", "partial"].includes(error.code)
-      )
+      ) {
         providers.delete(activeProject);
+        snapshots.invalidate(activeProject);
+      }
       json(response, error instanceof VaultError ? error.status : 500, {
         error: safeError(error),
         code: error instanceof VaultError ? error.code : "internal",
@@ -384,6 +413,8 @@ export async function startServer(options: {
     issueLaunchUrl,
     close: () =>
       new Promise<void>((resolve, reject) => {
+        snapshots.clear();
+        providers.clear();
         server.close((error) => (error ? reject(error) : resolve()));
         server.closeIdleConnections();
       }),

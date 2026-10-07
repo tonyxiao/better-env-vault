@@ -1,3 +1,8 @@
+import { Eye, EyeOff } from "lucide-react";
+import { Button } from "./components/ui/button.js";
+import { Input } from "./components/ui/input.js";
+import { Textarea } from "./components/ui/textarea.js";
+import { Checkbox } from "./components/ui/checkbox.js";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { ResolvedVariable } from "../../../packages/core/src/resolver.js";
 
@@ -9,23 +14,8 @@ export function originLabel(variable: ResolvedVariable) {
 }
 
 export function EyeIcon({ hidden = false }: { hidden?: boolean }) {
-  return (
-    <svg
-      aria-hidden="true"
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
-      <circle cx="12" cy="12" r="3" />
-      {hidden ? <path d="m3 3 18 18" /> : null}
-    </svg>
-  );
+  const Icon = hidden ? EyeOff : Eye;
+  return <Icon aria-hidden="true" />;
 }
 
 export function InlineEditor({
@@ -143,7 +133,7 @@ export function InlineEditor({
       {loading ? (
         <span role="status">Loading value…</span>
       ) : shown ? (
-        <textarea
+        <Textarea
           ref={field}
           aria-label={`${variable.name} value in ${environment}`}
           value={value}
@@ -158,22 +148,17 @@ export function InlineEditor({
           disabled={busy || failedLoad}
         />
       ) : (
-        <button
-          type="button"
-          className="secondary"
-          onClick={() => setShown(true)}
-        >
+        <Button type="button" variant="outline" onClick={() => setShown(true)}>
           Reveal inline value
-        </button>
+        </Button>
       )}
       {shown && !loading && value === "" ? (
         <label className="checkbox">
-          <input
-            type="checkbox"
+          <Checkbox
             checked={empty}
-            onChange={(event) => {
-              setEmpty(event.target.checked);
-              if (event.target.checked) setValue("");
+            onCheckedChange={(checked) => {
+              setEmpty(checked === true);
+              if (checked === true) setValue("");
             }}
             disabled={busy}
           />
@@ -192,31 +177,32 @@ export function InlineEditor({
         </span>
       ) : null}
       <div className="inline-actions">
-        <button
+        <Button
           type="submit"
           disabled={
             busy || loading || failedLoad || !dirty || (value === "" && !empty)
           }
         >
           {busy ? "Saving…" : "Save"}
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
-          className="secondary"
+          variant="outline"
           disabled={busy}
           onClick={onCancel}
         >
           Cancel
-        </button>
+        </Button>
         {onRemove && variable.state === "explicit" ? (
-          <button
+          <Button
             type="button"
+            variant="link"
             className="text-button"
             disabled={busy || loading}
             onClick={() => void onRemove()}
           >
             Remove override
-          </button>
+          </Button>
         ) : null}
       </div>
     </form>

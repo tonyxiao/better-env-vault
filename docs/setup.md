@@ -206,6 +206,19 @@ To deliberately clear a value, select **Set an explicit empty value**; use
 **Adopt into schema** registers unmanaged items without copying their values.
 **Project settings** edits `@vaultConfig` in the schema header.
 
+The UI uses shadcn/ui components, Radix primitives, Tailwind CSS, and Lucide icons.
+Revealing the matrix keeps raw editable values in browser memory, so opening an
+inline editor reuses the loaded value. Search, filters, and hide/show interaction
+run locally. Browser values are never stored in localStorage or on disk.
+
+The local server caches resolved vault snapshots in process memory for 30 seconds
+and shares in-flight reads. **Refresh** bypasses that cache, so external 1Password
+changes appear immediately when requested. Saves invalidate cached snapshots;
+schema changes and provider errors also force new reads. Cached snapshots expire
+and are dropped from the server cache. CLI loads and mutation checks always read
+fresh values from 1Password. Hiding values clears the browser's revealed matrix;
+server memory follows its separate 30-second expiry.
+
 SDK connection attempts are shared between simultaneous requests. After a
 provider authorization error, an explicit refresh establishes a fresh SDK
 connection. Saves are never automatically retried.
@@ -258,7 +271,8 @@ overrides, inheritance, and confirmed deletion, and removes the fixture.
 Existing item versions are checked to remain unchanged. Chrome must be installed.
 If interrupted, `.local/ui-test-recovery.json` identifies only that test fixture.
 
-`npm run test:matrix` checks global reveal/hide, inline editing, inheritance
+`npm run test:matrix` checks global reveal/hide, cached inline editing, create/delete,
+explicit empty values, drawer focus, mobile layout, CSP, and inheritance
 labels, cancellation, and late-response masking using a memory provider. It
 requires local Chrome and never accesses 1Password.
 
