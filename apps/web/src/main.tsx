@@ -225,6 +225,7 @@ function App() {
             <label htmlFor="project">Project</label>
             <select
               id="project"
+              disabled={busy}
               value={project}
               onChange={(e) => {
                 close();
@@ -363,6 +364,7 @@ function App() {
                           <td key={resolution.environment}>
                             <button
                               className={`value-cell ${v.state} ${!v.valid ? "invalid" : ""}`}
+                              disabled={busy}
                               aria-label={`Edit ${v.name} in ${resolution.environment}`}
                               onClick={() =>
                                 setCell({
@@ -598,6 +600,9 @@ function Editor({
         : "",
   );
   const [notes, setNotes] = useState<string>();
+  const [valueTouched, setValueTouched] = useState(false);
+  const [notesTouched, setNotesTouched] = useState(false);
+  const [explicitEmpty, setExplicitEmpty] = useState(false);
   const [revealed, setRevealed] = useState<string>();
   const [revealing, setRevealing] = useState(false);
   const [localError, setLocalError] = useState("");
@@ -614,8 +619,9 @@ function Editor({
     try {
       const result = await onReveal(cell.environment, v.name);
       setRevealed(result.value ?? "");
-      if (result.explicitValue !== undefined) setValue(result.explicitValue);
-      setNotes(result.notes);
+      if (result.explicitValue !== undefined && !valueTouched)
+        setValue(result.explicitValue);
+      if (!notesTouched) setNotes(result.notes);
     } catch (error) {
       setLocalError((error as Error).message);
     } finally {
@@ -630,8 +636,8 @@ function Editor({
             action,
             ...common,
             environment: cell.environment,
-            value,
-            ...(notes !== undefined ? { notes } : {}),
+            ...(valueTouched ? { value } : {}),
+            ...(notesTouched ? { notes: notes ?? "" } : {}),
           }
         : action === "default"
           ? { action, ...common, value }
@@ -704,8 +710,8 @@ function Editor({
                 className="text-button"
                 onClick={() => {
                   setRevealed(undefined);
-                  if (v.sensitive) setValue("");
-                  setNotes(undefined);
+                  if (v.sensitive && !valueTouched) setValue("");
+                  if (!notesTouched) setNotes(undefined);
                 }}
               >
                 Hide value
@@ -752,11 +758,36 @@ function Editor({
                 rows={5}
                 autoComplete="off"
                 spellCheck={false}
+                placeholder={
+                  action === "set" && v.state === "explicit" && v.sensitive
+                    ? "Enter a replacement, or leave the current value unchanged."
+                    : undefined
+                }
                 value={value}
-                onChange={(e) => setValue(e.target.value)}
+                onChange={(e) => {
+                  setValue(e.target.value);
+                  setValueTouched(true);
+                  setExplicitEmpty(false);
+                }}
                 readOnly={action === "default" && !v.editable}
               />
             </label>
+            {action === "set" ? (
+              <label className="checkbox">
+                <input
+                  type="checkbox"
+                  checked={explicitEmpty}
+                  onChange={(e) => {
+                    setExplicitEmpty(e.target.checked);
+                    if (e.target.checked) {
+                      setValue("");
+                      setValueTouched(true);
+                    } else if (value === "") setValueTouched(false);
+                  }}
+                />
+                Set an explicit empty value
+              </label>
+            ) : null}
             {action === "default" && !v.editable ? (
               <p>
                 Expression defaults are read-only. Edit them in your schema.
@@ -773,7 +804,10 @@ function Editor({
                       : ""
                   }
                   value={notes ?? ""}
-                  onChange={(e) => setNotes(e.target.value)}
+                  onChange={(e) => {
+                    setNotes(e.target.value);
+                    setNotesTouched(true);
+                  }}
                 />
               </label>
             ) : null}
@@ -846,6 +880,10 @@ function Editor({
           <button
             disabled={
               busy ||
+              (action === "set" &&
+                ((!valueTouched && !notesTouched) ||
+                  (valueTouched && value === "" && !explicitEmpty))) ||
+              (action === "set" && v.state !== "explicit" && !valueTouched) ||
               (action === "delete" && confirmation !== v.name) ||
               (action === "default" && !v.editable)
             }
@@ -907,6 +945,13 @@ function ProjectDialog({
   const [type, setType] = useState("string");
   const [required, setRequired] = useState(false);
   const [sensitive, setSensitive] = useState(true);
+  const [createWithValue, setCreateWithValue] = useState(!initialName);
+  const [environment, setEnvironment] = useState(
+    matrix.config.defaultEnvironment ?? matrix.environments[0],
+  );
+  const [initialValue, setInitialValue] = useState("");
+  const [initialNotes, setInitialNotes] = useState("");
+  const [explicitEmpty, setExplicitEmpty] = useState(false);
   const [config, setConfig] = useState(JSON.stringify(matrix.config, null, 2));
   const [error, setError] = useState("");
   function submit(event: FormEvent) {
@@ -926,6 +971,13 @@ function ProjectDialog({
         type,
         required,
         sensitive,
+        ...(createWithValue
+          ? {
+              initialValues: {
+                [environment]: { value: initialValue, notes: initialNotes },
+              },
+            }
+          : {}),
         versions:
           matrix.versions[name] ??
           Object.fromEntries(matrix.environments.map((env) => [env, null])),
@@ -950,7 +1002,9 @@ function ProjectDialog({
       <p className="dialog-intro">
         {mode === "settings"
           ? "These settings live in the header of your .env.schema. Vaults are identified by their IDs."
-          : "Define the variable here, then set its values in the environment matrix."}
+          : initialName
+            ? "Adopt the existing vault item without copying its value into the schema."
+            : "Create a secret in an environment. Child environments inherit its value until you add an override."}
       </p>
       {error ? (
         <div role="alert" className="alert error">
@@ -1007,13 +1061,86 @@ function ProjectDialog({
               />
               Sensitive
             </label>
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={createWithValue}
+                onChange={(e) => setCreateWithValue(e.target.checked)}
+              />
+              Set an initial environment value
+            </label>
+            {createWithValue ? (
+              <fieldset className="initial-value">
+                <legend>Initial value</legend>
+                <label>
+                  Environment
+                  <select
+                    value={environment}
+                    onChange={(e) => setEnvironment(e.target.value)}
+                  >
+                    {matrix.environments.map((env) => (
+                      <option key={env} value={env}>
+                        {env}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Secret value
+                  <textarea
+                    aria-label="Secret value"
+                    rows={5}
+                    autoComplete="off"
+                    spellCheck={false}
+                    value={initialValue}
+                    onChange={(e) => {
+                      setInitialValue(e.target.value);
+                      setExplicitEmpty(false);
+                    }}
+                  />
+                </label>
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={explicitEmpty}
+                    onChange={(e) => {
+                      setExplicitEmpty(e.target.checked);
+                      if (e.target.checked) setInitialValue("");
+                    }}
+                  />
+                  Use an explicit empty value
+                </label>
+                <label>
+                  Notes
+                  <textarea
+                    aria-label="Initial value notes"
+                    value={initialNotes}
+                    onChange={(e) => setInitialNotes(e.target.value)}
+                  />
+                </label>
+              </fieldset>
+            ) : null}
           </>
         )}
         <div className="form-actions">
           <button type="button" className="secondary" onClick={onClose}>
             Cancel
           </button>
-          <button disabled={busy}>{busy ? "Saving…" : "Save"}</button>
+          <button
+            disabled={
+              busy ||
+              (mode === "add" &&
+                createWithValue &&
+                initialValue === "" &&
+                !explicitEmpty)
+            }
+          >
+            {busy
+              ? "Saving…"
+              : mode === "add" && !initialName
+                ? "Create secret"
+                : "Save"}
+          </button>
         </div>
       </form>
     </Dialog>

@@ -2,6 +2,47 @@ import { it, expect } from "vitest";
 import { request as httpRequest } from "node:http";
 import { startServer } from "../apps/web/src/server.js";
 import { fixture, MemoryProvider, config } from "./helpers.js";
+import { OnePasswordProvider } from "../packages/core/src/provider.js";
+import { VaultError } from "../packages/core/src/errors.js";
+import { vi } from "vitest";
+
+it("reconnects after expired provider authorization when the user refreshes", async () => {
+  const schema = await fixture("# @optional\nTOKEN=\n");
+  const expired = new MemoryProvider(),
+    fresh = new MemoryProvider();
+  expired.readVault = async () => {
+    throw new VaultError(
+      "Expired desktop authorization.",
+      "authentication",
+      502,
+    );
+  };
+  const connect = vi
+    .spyOn(OnePasswordProvider, "connect")
+    .mockResolvedValueOnce(expired as unknown as OnePasswordProvider)
+    .mockResolvedValueOnce(fresh as unknown as OnePasswordProvider);
+  const app = await startServer({ schemas: [schema.path] });
+  try {
+    const session = await fetch(app.url + "/api/session", {
+      method: "POST",
+      headers: { Origin: app.url, "Content-Type": "application/json" },
+      body: JSON.stringify({ token: app.bootstrap }),
+    });
+    const headers = {
+      Cookie: session.headers.get("set-cookie")!.split(";")[0],
+    };
+    expect(
+      (await fetch(app.url + "/api/matrix?project=0", { headers })).status,
+    ).toBe(502);
+    expect(
+      (await fetch(app.url + "/api/matrix?project=0", { headers })).status,
+    ).toBe(200);
+    expect(connect).toHaveBeenCalledTimes(2);
+  } finally {
+    await app.close();
+    connect.mockRestore();
+  }
+});
 
 it("protects matrix reads, reveal, mutations, launch replay, and filesystem boundaries", async () => {
   const schema = await fixture("# @optional\nTOKEN=\n");

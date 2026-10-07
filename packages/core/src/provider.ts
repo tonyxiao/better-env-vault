@@ -4,6 +4,9 @@ import {
   ItemCategory,
   ItemFieldType,
   ItemState,
+  DesktopSessionExpiredError,
+  AuthExpiredError,
+  RateLimitExceededError,
   type Client,
   type Item,
 } from "@1password/sdk";
@@ -124,6 +127,21 @@ export class OnePasswordProvider implements Provider {
       return await operation();
     } catch (error) {
       if (error instanceof VaultError) throw error;
+      if (
+        error instanceof DesktopSessionExpiredError ||
+        error instanceof AuthExpiredError
+      )
+        throw new VaultError(
+          "1Password authorization expired. Unlock the app and refresh to reconnect, or renew your service-account token.",
+          "authentication",
+          502,
+        );
+      if (error instanceof RateLimitExceededError)
+        throw new VaultError(
+          "1Password rate limit reached. Wait before refreshing.",
+          "rate-limit",
+          429,
+        );
       throw new VaultError(
         "1Password operation failed. Check authorization and permissions, then refresh before retrying.",
         "provider",

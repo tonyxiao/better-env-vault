@@ -26,13 +26,17 @@ const common = {
   versions: z.record(z.string(), z.number().int().nullable()),
 };
 export const editRequest = z.discriminatedUnion("action", [
-  z.strictObject({
-    ...common,
-    action: z.literal("set"),
-    environment: z.string(),
-    value: z.string().max(65536),
-    notes: z.string().max(65536).optional(),
-  }),
+  z
+    .strictObject({
+      ...common,
+      action: z.literal("set"),
+      environment: z.string(),
+      value: z.string().max(65536).optional(),
+      notes: z.string().max(65536).optional(),
+    })
+    .refine(
+      (request) => request.value !== undefined || request.notes !== undefined,
+    ),
   z.strictObject({
     ...common,
     action: z.literal("remove"),
@@ -59,6 +63,15 @@ export const editRequest = z.discriminatedUnion("action", [
     required: z.boolean().default(false),
     sensitive: z.boolean().default(true),
     defaultValue: z.string().max(65536).optional(),
+    initialValues: z
+      .record(
+        z.string(),
+        z.strictObject({
+          value: z.string().max(65536),
+          notes: z.string().max(65536).optional(),
+        }),
+      )
+      .optional(),
   }),
   z.strictObject({ ...common, action: z.literal("rename"), newName: name }),
   z.strictObject({
@@ -285,6 +298,14 @@ async function performEdit(
   }
   const snapshot = await readVaults(schema, provider);
   checkVersions(schema, snapshot, request);
+  if (request.action === "add") {
+    for (const environment of Object.keys(request.initialValues ?? {})) {
+      if (!Object.hasOwn(schema.config.environments, environment))
+        throw new VaultError(
+          "Initial values must target environments declared in the schema.",
+        );
+    }
+  }
   if (request.action === "delete" && request.confirmation !== request.name)
     throw new VaultError(
       "Type the variable name to confirm deletion from every environment.",
@@ -307,8 +328,13 @@ async function performEdit(
   if (request.action === "set") {
     const items = simulated[request.environment];
     const item = items.find((i) => i.name === request.name);
-    if (item) item.value = request.value;
-    else
+    if (item) {
+      if (request.value !== undefined) item.value = request.value;
+    } else {
+      if (request.value === undefined)
+        throw new VaultError(
+          "Set a value before adding notes to a new override.",
+        );
       items.push({
         id: "pending",
         version: 0,
@@ -316,6 +342,20 @@ async function performEdit(
         value: request.value,
         notes: request.notes ?? "",
       });
+    }
+  } else if (request.action === "add") {
+    for (const [env, initial] of Object.entries(request.initialValues ?? {})) {
+      const item = simulated[env].find((i) => i.name === request.name);
+      if (item) item.value = initial.value;
+      else
+        simulated[env].push({
+          id: "pending",
+          version: 0,
+          name: request.name,
+          value: initial.value,
+          notes: initial.notes ?? "",
+        });
+    }
   } else if (request.action === "rename") {
     for (const items of Object.values(simulated))
       for (const item of items)
@@ -331,7 +371,11 @@ async function performEdit(
     const item = resolved.variables.find((v) => v.name === key);
     // Adding an unfilled required variable is allowed; saving a value/default must validate it.
     if (
-      ((request.action === "set" && env === request.environment) ||
+      ((request.action === "set" &&
+        request.value !== undefined &&
+        env === request.environment) ||
+        (request.action === "add" &&
+          Object.hasOwn(request.initialValues ?? {}, env)) ||
         request.action === "default") &&
       item &&
       !item.valid
@@ -363,11 +407,25 @@ async function performEdit(
       const saved = await provider.save(
         schema.config.environments[request.environment].vault,
         request.name,
-        request.value,
+        request.value ?? original!.value,
         request.notes ?? original?.notes ?? "",
         original,
       );
       undo.push({ env: request.environment, original, saved, kind: "save" });
+    } else if (request.action === "add") {
+      for (const [env, initial] of Object.entries(
+        request.initialValues ?? {},
+      )) {
+        const original = snapshot[env].find((i) => i.name === request.name);
+        const saved = await provider.save(
+          schema.config.environments[env].vault,
+          request.name,
+          initial.value,
+          initial.notes ?? original?.notes ?? "",
+          original,
+        );
+        undo.push({ env, original, saved, kind: "save" });
+      }
     } else if (
       request.action === "rename" ||
       request.action === "delete" ||

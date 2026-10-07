@@ -275,6 +275,117 @@ describe("shell and process integration", () => {
 });
 
 describe("coordinated editing", () => {
+  it("creates a secret and initial environment values together, without writing them into the schema", async () => {
+    const schema = await fixture("# @public\nOTHER=base\n");
+    const provider = new MemoryProvider();
+    await applyEdit(schema.path, provider, {
+      action: "add",
+      name: "NEW_TOKEN",
+      sensitive: true,
+      required: true,
+      type: "string",
+      fingerprint: schema.fingerprint,
+      versions: { dev: null, staging: null, prod: null },
+      initialValues: {
+        dev: { value: "sensitive-initial-value", notes: "Dev note" },
+        prod: { value: "prod-secret" },
+      },
+    });
+    const updated = await loadSchema(schema.path);
+    expect(updated.text).not.toContain("sensitive-initial-value");
+    expect(updated.text).not.toContain("prod-secret");
+    const snapshot = await readVaults(updated, provider);
+    expect(
+      (await resolveEnvironment(updated, "staging", snapshot)).variables.find(
+        (v) => v.name === "NEW_TOKEN",
+      ),
+    ).toMatchObject({
+      value: "sensitive-initial-value",
+      state: "inherited",
+      source: "dev",
+    });
+    expect(
+      (await resolveEnvironment(updated, "prod", snapshot)).variables.find(
+        (v) => v.name === "NEW_TOKEN",
+      ),
+    ).toMatchObject({ value: "prod-secret", state: "explicit" });
+    expect(snapshot.dev.find((i) => i.name === "NEW_TOKEN")?.notes).toBe(
+      "Dev note",
+    );
+  });
+  it("preserves the secret when only override notes change", async () => {
+    const schema = await fixture("# @optional\nTOKEN=\n");
+    const provider = new MemoryProvider();
+    await provider.save(
+      config.environments.dev.vault,
+      "TOKEN",
+      "secret-retained",
+      "old notes",
+    );
+    await applyEdit(schema.path, provider, {
+      action: "set",
+      name: "TOKEN",
+      environment: "dev",
+      fingerprint: schema.fingerprint,
+      versions: { dev: 1 },
+      notes: "Updated notes",
+    });
+    expect(
+      (await provider.readVault(config.environments.dev.vault))[0],
+    ).toMatchObject({ value: "secret-retained", notes: "Updated notes" });
+    await expect(
+      applyEdit(schema.path, provider, {
+        action: "set",
+        name: "TOKEN",
+        environment: "prod",
+        fingerprint: schema.fingerprint,
+        versions: { prod: null },
+        notes: "No override here",
+      }),
+    ).rejects.toThrow("Set a value");
+  });
+  it("rolls back initial values when adding across environments fails", async () => {
+    const schema = await fixture("# @public\nOTHER=base\n");
+    const provider = new MemoryProvider();
+    provider.failAt = 2;
+    await expect(
+      applyEdit(schema.path, provider, {
+        action: "add",
+        name: "NEW_TOKEN",
+        fingerprint: schema.fingerprint,
+        versions: { dev: null, staging: null, prod: null },
+        initialValues: { dev: { value: "secret" }, prod: { value: "secret" } },
+      }),
+    ).rejects.toThrow();
+    expect(await readFile(schema.path, "utf8")).toBe(schema.text);
+    expect(await provider.readVault(config.environments.dev.vault)).toEqual([]);
+  });
+  it("validates typed initial values and rejects unknown destinations before writing", async () => {
+    const schema = await fixture("# @public\nOTHER=base\n");
+    const provider = new MemoryProvider();
+    const request = {
+      action: "add",
+      name: "NEW_NUMBER",
+      sensitive: false,
+      type: "number(min=1)",
+      fingerprint: schema.fingerprint,
+      versions: { dev: null, staging: null, prod: null },
+    };
+    await expect(
+      applyEdit(schema.path, provider, {
+        ...request,
+        initialValues: { dev: { value: "invalid" } },
+      }),
+    ).rejects.toThrow("requirements");
+    await expect(
+      applyEdit(schema.path, provider, {
+        ...request,
+        initialValues: { unknown: { value: "2" } },
+      }),
+    ).rejects.toThrow("declared");
+    expect(provider.calls).toBe(0);
+    expect(await readFile(schema.path, "utf8")).toBe(schema.text);
+  });
   it("rejects invalid metadata when adding a definition", async () => {
     const schema = await fixture("# @public\nKEY=base\n");
     const provider = new MemoryProvider();

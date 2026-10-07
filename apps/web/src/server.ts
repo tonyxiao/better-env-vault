@@ -20,8 +20,11 @@ import {
 import { applyEdit } from "../../../packages/core/src/edit.js";
 import { safeError, VaultError } from "../../../packages/core/src/errors.js";
 
-const equal = (a: string, b: string) =>
-  a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+const equal = (a: string, b: string) => {
+  const left = Buffer.from(a),
+    right = Buffer.from(b);
+  return left.length === right.length && timingSafeEqual(left, right);
+};
 async function body(request: IncomingMessage): Promise<unknown> {
   const parts: Buffer[] = [];
   let bytes = 0;
@@ -61,12 +64,19 @@ export async function startServer(options: {
   }));
   const providers = new Map<
     string,
-    { fingerprint: string; provider: Provider }
+    { fingerprint: string; pending: Promise<Provider> }
   >();
   const bootstrap = randomBytes(32).toString("hex");
   const credential = randomBytes(32).toString("hex");
   const mutationToken = randomBytes(32).toString("hex");
-  let bootstrapped = false;
+  const launchTokens = new Map([[bootstrap, Date.now() + 5 * 60_000]]);
+  function issueLaunchUrl() {
+    for (const [key, expires] of launchTokens)
+      if (expires < Date.now()) launchTokens.delete(key);
+    const token = randomBytes(32).toString("hex");
+    launchTokens.set(token, Date.now() + 5 * 60_000);
+    return `${url}/?launch=${randomBytes(8).toString("hex")}#session=${token}`;
+  }
   let port = options.port ?? 0;
   const serverDir = dirname(fileURLToPath(import.meta.url));
   const staticDirectory =
@@ -74,6 +84,7 @@ export async function startServer(options: {
   // Source mode resolves relative to apps/web/src; compiled mode is nested under dist/apps/web/src.
   const fallbackStaticDirectory = resolve(serverDir, "../dist");
   const server = createServer(async (request, response) => {
+    let activeProject: string | undefined;
     response.setHeader("Cache-Control", "no-store");
     response.setHeader("X-Content-Type-Options", "nosniff");
     response.setHeader("Referrer-Policy", "no-referrer");
@@ -103,17 +114,20 @@ export async function startServer(options: {
             403,
           );
         const data = (await body(request)) as { token?: string };
-        if (
-          bootstrapped ||
-          typeof data.token !== "string" ||
-          !equal(data.token, bootstrap)
-        )
+        const match =
+          typeof data?.token === "string"
+            ? [...launchTokens].find(
+                ([key, expires]) =>
+                  expires >= Date.now() && equal(data.token!, key),
+              )
+            : undefined;
+        if (!match)
           throw new VaultError(
             "Launch link expired. Restart the server to open a new session.",
             "session",
             401,
           );
-        bootstrapped = true;
+        launchTokens.delete(match[0]);
         response.setHeader(
           "Set-Cookie",
           `bev-session=${credential}; HttpOnly; SameSite=Strict; Path=/`,
@@ -167,6 +181,7 @@ export async function startServer(options: {
           (p) => p.id === url.searchParams.get("project"),
         );
         if (!project) throw new VaultError("Select an available project.");
+        activeProject = project.id;
         const schema = await loadSchema(project.path);
         let cached = providers.get(project.id);
         // Declarative edits can change scope/auth; never reuse a provider with stale settings.
@@ -174,14 +189,15 @@ export async function startServer(options: {
         if (!cached || cached.fingerprint !== providerFingerprint) {
           cached = {
             fingerprint: providerFingerprint,
-            provider:
-              options.provider ??
-              (await OnePasswordProvider.connect(schema.config)),
+            pending: options.provider
+              ? Promise.resolve(options.provider)
+              : OnePasswordProvider.connect(schema.config),
           };
           providers.set(project.id, cached);
         }
+        const provider = await cached.pending;
         if (url.pathname === "/api/matrix" && request.method === "GET") {
-          const snapshot = await readVaults(schema, cached.provider);
+          const snapshot = await readVaults(schema, provider);
           const environments = Object.keys(schema.config.environments);
           const resolutions = await Promise.all(
             environments.map((env) =>
@@ -233,7 +249,7 @@ export async function startServer(options: {
               "conflict",
               409,
             );
-          const snapshot = await readVaults(schema, cached.provider);
+          const snapshot = await readVaults(schema, provider);
           const resolution = await resolveEnvironment(
             schema,
             data.environment,
@@ -256,7 +272,7 @@ export async function startServer(options: {
           json(
             response,
             200,
-            await applyEdit(schema.path, cached.provider, await body(request)),
+            await applyEdit(schema.path, provider, await body(request)),
           );
           return;
         }
@@ -291,6 +307,14 @@ export async function startServer(options: {
       });
       response.end(contents);
     } catch (error) {
+      // The next explicit request opens a fresh session after expired/failed
+      // authorization. Mutations are never automatically retried.
+      if (
+        activeProject &&
+        error instanceof VaultError &&
+        ["authentication", "provider", "partial"].includes(error.code)
+      )
+        providers.delete(activeProject);
       json(response, error instanceof VaultError ? error.status : 500, {
         error: safeError(error),
         code: error instanceof VaultError ? error.code : "internal",
@@ -312,6 +336,7 @@ export async function startServer(options: {
     // port in an existing tab; fragment-only navigation would skip app startup.
     launchUrl: `${url}/?launch=${randomBytes(8).toString("hex")}#session=${bootstrap}`,
     bootstrap,
+    issueLaunchUrl,
     close: () =>
       new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));

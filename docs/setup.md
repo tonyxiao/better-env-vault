@@ -178,9 +178,18 @@ restores inheritance.
 
 The editor also supports public schema defaults, descriptions, types, required
 and sensitive status, renaming across vaults, and confirmed deletion everywhere.
-**Add variable** creates a definition; set environment values from its new row.
+**Add variable** creates a definition and an initial value in the selected
+environment in one save. Turn off **Set an initial environment value** to create
+only a definition. Sensitive values are written to 1Password, never to the schema.
+You can update an override's notes without revealing or replacing its value.
+To deliberately clear a value, select **Set an explicit empty value**; use
+**Remove override** to restore inheritance instead.
 **Adopt into schema** registers unmanaged items without copying their values.
 **Project settings** edits `@vaultConfig` in the schema header.
+
+SDK connection attempts are shared between simultaneous requests. After a
+provider authorization error, an explicit refresh establishes a fresh SDK
+connection. Saves are never automatically retried.
 
 Every mutation rechecks schema fingerprints and affected item versions, and
 mutations for one project are serialized. Schema writes preserve permissions and
@@ -216,6 +225,19 @@ npm run typecheck
 npm run build
 npm run format:check
 ```
+
+For a local Chrome test of the complete UI against a selected schema:
+
+```bash
+npm run build
+npm run test:ui -- --schema ./path/to/.env.schema --headed
+```
+
+This explicit command creates one uniquely named non-secret fixture, tests
+creation, masking/reveal, notes-only updates, replacement values, empty
+overrides, inheritance, and confirmed deletion, and removes the fixture.
+Existing item versions are checked to remain unchanged. Chrome must be installed.
+If interrupted, `.local/ui-test-recovery.json` identifies only that test fixture.
 
 The normal test suite uses a memory provider and never mutates live vaults.
 To explicitly test the local desktop SDK with dedicated disposable vaults:

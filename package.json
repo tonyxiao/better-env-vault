@@ -19,7 +19,9 @@
     "test:local": "tsc && node dist/scripts/test-local.js",
     "format": "prettier --write packages apps scripts tests docs README.md package.json tsconfig*.json vitest.config.ts .github/workflows/ci.yml",
     "format:check": "prettier --check packages apps scripts tests docs README.md package.json tsconfig*.json vitest.config.ts .github/workflows/ci.yml",
-    "test:cleanup": "tsc && node dist/scripts/cleanup-local.js"
+    "test:cleanup": "tsc && node dist/scripts/cleanup-local.js",
+    "start": "node bin/better-env-vault.mjs serve",
+    "test:ui": "tsx scripts/test-ui.ts"
   },
   "engines": {
     "node": ">=22"
@@ -38,6 +40,7 @@
     "@types/react": "19.2.2",
     "@types/react-dom": "19.2.2",
     "@vitejs/plugin-react": "5.0.4",
+    "playwright-core": "1.63.0",
     "prettier": "3.6.2",
     "tsx": "4.20.6",
     "typescript": "5.9.3",
