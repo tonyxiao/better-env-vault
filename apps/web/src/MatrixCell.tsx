@@ -29,6 +29,7 @@ export function SpreadsheetEditor({
   origin,
   compact = false,
   inputLabel,
+  shiftEnterNewline = false,
   hideEpoch,
   initialValue,
   draftValue,
@@ -44,6 +45,7 @@ export function SpreadsheetEditor({
   origin?: string;
   compact?: boolean;
   inputLabel?: string;
+  shiftEnterNewline?: boolean;
   hideEpoch: number;
   initialValue?: { value?: string };
   draftValue?: string;
@@ -155,7 +157,10 @@ export function SpreadsheetEditor({
           (event.key !== "Enter" && event.key !== "Tab")
         )
           return;
-        if (event.key === "Enter" && event.altKey) {
+        if (
+          event.key === "Enter" &&
+          (event.altKey || (event.shiftKey && shiftEnterNewline))
+        ) {
           event.preventDefault();
           event.stopPropagation();
           const input = field.current!;
@@ -206,7 +211,7 @@ export function SpreadsheetEditor({
             autoComplete="off"
             spellCheck={false}
             disabled={failedLoad}
-            title="Enter saves and moves down; Tab saves and moves across; Alt+Enter inserts a newline"
+            title={`Enter saves and moves down; Tab saves and moves across; ${shiftEnterNewline ? "Shift+Enter or " : ""}Alt+Enter inserts a newline`}
           />
         ) : (
           <Button

@@ -118,6 +118,7 @@ function VaultValueEditor({
       }
       environment={row.environment.name}
       compact
+      shiftEnterNewline={field === "notes"}
       hideEpoch={hideEpoch}
       initialValue={
         field === "notes"

@@ -60,7 +60,7 @@ to browser storage. After the server's vault snapshot expires, a single-cell
 reveal reads only the selected credential through the SDK.
 
 Notes are visible in their own grid column and support inline editing, including
-multiline text with Alt+Enter. Notes-only saves preserve the credential value
+multiline text with Shift+Enter or Alt+Enter. Enter saves the note. Notes-only saves preserve the credential value
 and do not require revealing it. Secret values remain masked until opened or
 explicitly revealed.
 

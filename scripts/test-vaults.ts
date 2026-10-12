@@ -85,12 +85,21 @@ try {
   });
   assert.equal(await notesInput.inputValue(), "original notes");
   await notesInput.fill("Edited inline notes");
+  await notesInput.press("Shift+Enter");
+  await notesInput.pressSequentially("Second line");
+  assert.equal(
+    await notesInput.inputValue(),
+    "Edited inline notes\nSecond line",
+  );
   await notesInput.press("Enter");
   await page
     .getByRole("status")
     .filter({ hasText: "Saved notes for TOKEN in infra" })
     .waitFor();
-  assert.equal(provider.vaults[infra][0].notes, "Edited inline notes");
+  assert.equal(
+    provider.vaults[infra][0].notes,
+    "Edited inline notes\nSecond line",
+  );
   assert.equal(provider.vaults[infra][0].value, "infra-fixture");
   assert.equal(
     cellReads,
