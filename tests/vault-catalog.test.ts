@@ -198,3 +198,39 @@ it("keeps opened-cell values scoped to item identity/version and rejects late ca
   await pending;
   expect(cache.peek(row)).toBeUndefined();
 });
+
+it("shows and searches notes with masked values, sorts columns, and preserves secrets in notes-only saves", async () => {
+  const { sortVaultRows } = await import("../apps/web/src/vault-model.js");
+  const { browser, provider } = await fixture();
+  provider.vaults[dev][0].notes = "Rotate monthly";
+  provider.vaults[prod][0].notes = "Production checklist";
+  const catalog = (await browser.catalog()) as VaultCatalog;
+  const rows = catalogRows(catalog);
+  const row = rows.find((r) => r.vaultId === dev)!;
+  expect(row.notes).toBe("Rotate monthly");
+  expect(row.variable.value).toBeUndefined();
+  expect(filterVaultRows(rows, "monthly", new Set())).toEqual([row]);
+  expect(
+    sortVaultRows(rows, [{ columnKey: "environment", direction: "DESC" }])[0]
+      .environment.name,
+  ).toBe("Production");
+  expect(
+    sortVaultRows(rows, [{ columnKey: "notes", direction: "DESC" }])[0].notes,
+  ).toBe("Rotate monthly");
+  await browser.edit(dev, {
+    action: "set",
+    environment: "vault",
+    name: row.variable.name,
+    notes: "Updated inline\nsecond line",
+    fingerprint: row.matrix.fingerprint,
+    versions: row.matrix.versions[row.variable.name],
+  });
+  expect(provider.vaults[dev][0]).toMatchObject({
+    value: "private-dev",
+    notes: "Updated inline\nsecond line",
+  });
+  expect(provider.vaults[prod][0]).toMatchObject({
+    value: "private-prod",
+    notes: "Production checklist",
+  });
+});

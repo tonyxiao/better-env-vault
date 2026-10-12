@@ -33,9 +33,8 @@ it("discovers vault metadata without reading secrets and keeps environments inde
     hasDefault: false,
     state: "explicit",
   });
-  expect(JSON.stringify(matrix)).not.toMatch(
-    /dev-private|prod-private|private notes/,
-  );
+  expect(matrix.notes?.TOKEN).toBe("private notes");
+  expect(JSON.stringify(matrix)).not.toMatch(/dev-private|prod-private/);
   expect(
     await browser.reveal(dev, {
       environment: "vault",

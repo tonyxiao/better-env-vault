@@ -247,6 +247,7 @@ export class VaultBrowser {
         environments: { vault: { vault: id } },
       },
       schemaPath: "",
+      notes: Object.fromEntries(items.map((item) => [item.name, item.notes])),
       environments: [environment],
       vaults: { vault: { id, name: vault.name } },
       resolutions: [reveal ? resolution : publicResolution(resolution)],

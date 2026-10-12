@@ -28,6 +28,7 @@ export function SpreadsheetEditor({
   environment,
   origin,
   compact = false,
+  inputLabel,
   hideEpoch,
   initialValue,
   draftValue,
@@ -42,6 +43,7 @@ export function SpreadsheetEditor({
   environment: string;
   origin?: string;
   compact?: boolean;
+  inputLabel?: string;
   hideEpoch: number;
   initialValue?: { value?: string };
   draftValue?: string;
@@ -191,7 +193,9 @@ export function SpreadsheetEditor({
           <Textarea
             ref={field}
             className="spreadsheet-input"
-            aria-label={`${variable.name} value in ${environment}`}
+            aria-label={
+              inputLabel ?? `${variable.name} value in ${environment}`
+            }
             value={value}
             onChange={(event) => {
               setValue(event.target.value);

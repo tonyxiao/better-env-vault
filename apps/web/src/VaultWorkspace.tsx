@@ -12,6 +12,7 @@ import {
   type Column,
   type DataGridHandle,
   type RenderEditCellProps,
+  type SortColumn,
 } from "react-data-grid";
 import {
   Info,
@@ -36,6 +37,7 @@ import { Dialog, Editor, ProjectDialog } from "./edit-dialogs.js";
 import {
   catalogRows,
   filterVaultRows,
+  sortVaultRows,
   maskCatalog,
   type VaultCatalog,
   type VaultRow,
@@ -55,10 +57,13 @@ interface Operation {
   payload: Record<string, unknown>;
   status: "saving" | "error";
   error?: string;
+  field: "value" | "notes";
 }
 function VaultValueEditor({
   row,
   rowIdx,
+  column,
+  field = "value",
   onClose,
   hideEpoch,
   visible,
@@ -69,19 +74,24 @@ function VaultValueEditor({
   register,
   navigate,
 }: RenderEditCellProps<VaultRow> & {
+  field?: "value" | "notes";
   hideEpoch: number;
   visible: boolean;
   operation?: Operation;
   cachedValue?: RevealedVaultValue;
   save: (row: VaultRow, payload: Record<string, unknown>) => Promise<boolean>;
   reveal: (row: VaultRow) => Promise<{ editableValue?: string }>;
-  register: (id: string, commit?: () => void) => void;
-  navigate: (rowIdx: number, direction: EditDirection) => void;
+  register: (id: string, field: string, commit?: () => void) => void;
+  navigate: (
+    rowIdx: number,
+    columnIdx: number,
+    direction: EditDirection,
+  ) => void;
 }) {
   const snapshot = useRef(row).current;
   const onCommitReady = useCallback(
-    (commit?: () => void) => register(row.id, commit),
-    [register, row.id],
+    (commit?: () => void) => register(row.id, field, commit),
+    [register, row.id, field],
   );
   const submit = (value: string) => {
     onClose(false);
@@ -89,38 +99,53 @@ function VaultValueEditor({
       action: "set",
       name: snapshot.variable.name,
       environment: "vault",
-      value,
+      [field]: value,
       fingerprint: snapshot.matrix.fingerprint,
       versions: snapshot.matrix.versions[snapshot.variable.name],
     });
   };
   return (
     <SpreadsheetEditor
-      variable={row.variable}
+      variable={
+        field === "notes"
+          ? { ...row.variable, value: row.notes, sensitive: false }
+          : row.variable
+      }
+      inputLabel={
+        field === "notes"
+          ? `Notes for ${row.variable.name} in ${row.environment.name}`
+          : undefined
+      }
       environment={row.environment.name}
       compact
       hideEpoch={hideEpoch}
       initialValue={
-        visible
-          ? { value: row.variable.value }
-          : cachedValue
-            ? { value: cachedValue.editableValue }
-            : undefined
+        field === "notes"
+          ? { value: row.notes }
+          : visible
+            ? { value: row.variable.value }
+            : cachedValue
+              ? { value: cachedValue.editableValue }
+              : undefined
       }
       draftValue={
         operation?.status === "error" &&
-        typeof operation.payload.value === "string"
-          ? operation.payload.value
+        typeof operation.payload[field] === "string"
+          ? (operation.payload[field] as string)
           : undefined
       }
-      onLoad={() => reveal(snapshot)}
+      onLoad={() =>
+        field === "notes"
+          ? Promise.resolve({ editableValue: snapshot.notes })
+          : reveal(snapshot)
+      }
       onSave={submit}
       onLeave={submit}
       onCancel={() => onClose(false)}
       onCommitReady={onCommitReady}
       onNavigate={(direction) => {
         onClose(false, false);
-        navigate(rowIdx, direction);
+        navigate(rowIdx, column.idx, direction);
       }}
     />
   );
@@ -129,14 +154,20 @@ function VaultValueEditor({
 export function VaultWorkspace({
   mutationToken,
   onDisconnect,
+  startupError = "",
 }: {
   mutationToken: string;
+  startupError?: string;
   onDisconnect: () => void;
 }) {
   const [catalog, setCatalog] = useState<VaultCatalog>();
   const catalogRef = useRef<VaultCatalog | undefined>(undefined);
   const valueCache = useRef(new VaultValueCache());
   const [loading, setLoading] = useState(true);
+  const [readPending, setReadPending] = useState(false);
+  const [sortColumns, setSortColumns] = useState<readonly SortColumn[]>([
+    { columnKey: "name", direction: "ASC" },
+  ]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [search, setSearch] = useState("");
@@ -178,10 +209,15 @@ export function VaultWorkspace({
   }, []);
   const activeCommit = useRef<(() => void) | undefined>(undefined);
   const activeRow = useRef<string | undefined>(undefined);
-  const register = useCallback((id: string, commit?: () => void) => {
-    activeCommit.current = commit;
-    activeRow.current = commit ? id : undefined;
-  }, []);
+  const activeField = useRef<string | undefined>(undefined);
+  const register = useCallback(
+    (id: string, field: string, commit?: () => void) => {
+      activeCommit.current = commit;
+      activeRow.current = commit ? id : undefined;
+      activeField.current = commit ? field : undefined;
+    },
+    [],
+  );
   const api = useCallback(
     async <T,>(url: string, body?: unknown): Promise<T> => {
       const response = await fetch(url, {
@@ -211,6 +247,9 @@ export function VaultWorkspace({
     visibleIntent.current = false;
     ++visibility.current;
     setAllVisible(false);
+    setSortColumns((previous) =>
+      previous.filter((sort) => sort.columnKey !== "value"),
+    );
     setRevealing(false);
     setHideEpoch((e) => e + 1);
     setDetails(undefined);
@@ -222,6 +261,7 @@ export function VaultWorkspace({
       const id = ++loadId.current;
       const generation = visibility.current;
       if (!quiet) setLoading(true);
+      setReadPending(true);
       setError("");
       try {
         let data = await api<VaultCatalog>(
@@ -260,12 +300,16 @@ export function VaultWorkspace({
           setError((error as Error).message);
         }
       } finally {
-        if (alive.current && id === loadId.current && !quiet) setLoading(false);
+        if (alive.current && id === loadId.current) {
+          setLoading(false);
+          setReadPending(false);
+        }
       }
     },
     [api, hide],
   );
   useEffect(() => {
+    if (!mutationToken) return;
     alive.current = true;
     void load();
     return () => {
@@ -274,11 +318,12 @@ export function VaultWorkspace({
       ++loadId.current;
       ++visibility.current;
     };
-  }, [load]);
+  }, [load, mutationToken]);
   const rows = useMemo(() => (catalog ? catalogRows(catalog) : []), [catalog]);
   const filtered = useMemo(
-    () => filterVaultRows(rows, search, environments),
-    [rows, search, environments],
+    () =>
+      sortVaultRows(filterVaultRows(rows, search, environments), sortColumns),
+    [rows, search, environments, sortColumns],
   );
   useLayoutEffect(() => {
     const element = grid.current?.element;
@@ -319,7 +364,14 @@ export function VaultWorkspace({
     pending.current.add(row.id);
     setOperations((previous) => ({
       ...previous,
-      [row.id]: { payload, status: "saving" },
+      [row.id]: {
+        payload,
+        status: "saving",
+        field:
+          payload.notes !== undefined && payload.value === undefined
+            ? "notes"
+            : "value",
+      },
     }));
     setNotice("");
     try {
@@ -335,7 +387,9 @@ export function VaultWorkspace({
       });
       await load(false, true);
       if (alive.current)
-        setNotice(`Saved ${row.variable.name} in ${row.environment.name}.`);
+        setNotice(
+          `Saved ${payload.notes !== undefined && payload.value === undefined ? "notes for " : ""}${row.variable.name} in ${row.environment.name}.`,
+        );
       return true;
     } catch (error) {
       if (alive.current)
@@ -344,6 +398,10 @@ export function VaultWorkspace({
           [row.id]: {
             payload,
             status: "error",
+            field:
+              payload.notes !== undefined && payload.value === undefined
+                ? "notes"
+                : "value",
             error: (error as Error).message,
           },
         }));
@@ -392,12 +450,33 @@ export function VaultWorkspace({
         setRevealing(false);
     }
   }
-  function navigate(rowIdx: number, direction: EditDirection) {
-    const step = direction === "up" || direction === "previous" ? -1 : 1;
-    for (let i = rowIdx + step; i >= 0 && i < filtered.length; i += step) {
-      if (operations[filtered[i].id]?.status !== "saving") {
+  function navigate(
+    rowIdx: number,
+    columnIdx: number,
+    direction: EditDirection,
+  ) {
+    let nextRow = rowIdx,
+      nextColumn = columnIdx;
+    for (let attempt = 0; attempt < filtered.length * 2; attempt++) {
+      if (direction === "up" || direction === "down")
+        nextRow += direction === "up" ? -1 : 1;
+      else if (direction === "next") {
+        if (nextColumn === 3) nextColumn = 4;
+        else {
+          nextColumn = 3;
+          nextRow++;
+        }
+      } else {
+        if (nextColumn === 4) nextColumn = 3;
+        else {
+          nextColumn = 4;
+          nextRow--;
+        }
+      }
+      if (nextRow < 0 || nextRow >= filtered.length) return;
+      if (!pending.current.has(filtered[nextRow].id)) {
         grid.current?.setActivePosition(
-          { rowIdx: i, idx: 3 },
+          { rowIdx: nextRow, idx: nextColumn },
           { enableEditor: true },
         );
         return;
@@ -450,6 +529,7 @@ export function VaultWorkspace({
     {
       key: "name",
       name: "Secret",
+      sortable: true,
       minWidth: 220,
       width: resizedWidths.name ?? (freezeNames ? 300 : 220),
       resizable: true,
@@ -463,6 +543,7 @@ export function VaultWorkspace({
     {
       key: "environment",
       name: "Environment",
+      sortable: true,
       minWidth: 160,
       width: resizedWidths.environment ?? 170,
       resizable: true,
@@ -482,13 +563,15 @@ export function VaultWorkspace({
     {
       key: "value",
       name: "Value",
+      sortable: allVisible,
       minWidth: 260,
       width: Math.max(
         260,
         gridWidth -
           36 -
           (resizedWidths.name ?? (freezeNames ? 300 : 220)) -
-          (resizedWidths.environment ?? 170),
+          (resizedWidths.environment ?? 170) -
+          (resizedWidths.notes ?? 280),
       ),
       cellClass: "environment-value-cell",
       editable: (row) => !deleting && operations[row.id]?.status !== "saving",
@@ -501,7 +584,11 @@ export function VaultWorkspace({
           {...props}
           visible={allVisible}
           hideEpoch={hideEpoch}
-          operation={operations[props.row.id]}
+          operation={
+            operations[props.row.id]?.field === "value"
+              ? operations[props.row.id]
+              : undefined
+          }
           cachedValue={valueCache.current.peek(props.row)}
           save={save}
           reveal={reveal}
@@ -510,7 +597,10 @@ export function VaultWorkspace({
         />
       ),
       renderCell: ({ row, rowIdx, column }) => {
-        const operation = operations[row.id];
+        const operation =
+          operations[row.id]?.field === "value"
+            ? operations[row.id]
+            : undefined;
         const shown =
           operation?.status === "saving" &&
           typeof operation.payload.value === "string" &&
@@ -527,7 +617,7 @@ export function VaultWorkspace({
               className="value-cell explicit"
               tabIndex={-1}
               aria-label={`Edit ${row.variable.name} in ${row.environment.name}`}
-              disabled={deleting || operation?.status === "saving"}
+              disabled={deleting || operations[row.id]?.status === "saving"}
               onClick={() =>
                 grid.current?.setActivePosition(
                   { rowIdx, idx: column.idx },
@@ -550,10 +640,16 @@ export function VaultWorkspace({
               </span>
             </Button>
             {operation?.status === "saving" ? (
-              <LoaderCircle
+              <span
+                role="status"
+                className="field-progress"
                 aria-label={`Saving ${row.variable.name} in ${row.environment.name}`}
-                className="size-4 animate-spin"
-              />
+              >
+                <LoaderCircle
+                  aria-hidden="true"
+                  className="size-4 animate-spin"
+                />
+              </span>
             ) : (
               <Button
                 variant="ghost"
@@ -572,7 +668,103 @@ export function VaultWorkspace({
               <Button
                 variant="ghost"
                 size="icon-xs"
+                className="cell-retry"
                 aria-label={`Retry saving ${row.variable.name} in ${row.environment.name}`}
+                onClick={() => void save(row, operation.payload)}
+              >
+                <RotateCcw />
+              </Button>
+            ) : null}
+          </div>
+        );
+      },
+    },
+    {
+      key: "notes",
+      name: "Notes",
+      sortable: true,
+      minWidth: 180,
+      width: resizedWidths.notes ?? 280,
+      resizable: true,
+      cellClass: "environment-value-cell notes-value-cell",
+      editable: (row) => !deleting && operations[row.id]?.status !== "saving",
+      editorOptions: {
+        commitOnOutsideClick: false,
+        closeOnExternalRowChange: false,
+      },
+      renderEditCell: (props) => (
+        <VaultValueEditor
+          {...props}
+          field="notes"
+          visible
+          hideEpoch={hideEpoch}
+          operation={
+            operations[props.row.id]?.field === "notes"
+              ? operations[props.row.id]
+              : undefined
+          }
+          save={save}
+          reveal={reveal}
+          register={register}
+          navigate={navigate}
+        />
+      ),
+      renderCell: ({ row, rowIdx, column }) => {
+        const operation =
+          operations[row.id]?.field === "notes"
+            ? operations[row.id]
+            : undefined;
+        const shown =
+          operation?.status === "saving" &&
+          typeof operation.payload.notes === "string"
+            ? operation.payload.notes
+            : row.notes;
+        return (
+          <div
+            className="matrix-cell"
+            aria-busy={operation?.status === "saving"}
+          >
+            <Button
+              variant="ghost"
+              className="value-cell notes-cell"
+              tabIndex={-1}
+              disabled={deleting || operations[row.id]?.status === "saving"}
+              aria-label={`Edit notes for ${row.variable.name} in ${row.environment.name}`}
+              title={shown || "Add notes"}
+              onClick={() =>
+                grid.current?.setActivePosition(
+                  { rowIdx, idx: column.idx },
+                  { enableEditor: true },
+                )
+              }
+            >
+              <span className="value">
+                {shown || <span className="text-muted-foreground">—</span>}
+              </span>
+              {operation?.error ? (
+                <span role="alert" className="origin field-error-message">
+                  {operation.error}
+                </span>
+              ) : null}
+            </Button>
+            {operation?.status === "saving" ? (
+              <span
+                role="status"
+                className="field-progress"
+                aria-label={`Saving notes for ${row.variable.name} in ${row.environment.name}`}
+              >
+                <LoaderCircle
+                  aria-hidden="true"
+                  className="size-4 animate-spin"
+                />
+              </span>
+            ) : null}
+            {operation?.status === "error" ? (
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="cell-retry"
+                aria-label={`Retry saving notes for ${row.variable.name} in ${row.environment.name}`}
                 onClick={() => void save(row, operation.payload)}
               >
                 <RotateCcw />
@@ -584,6 +776,13 @@ export function VaultWorkspace({
     },
   ];
   const addingMatrix = catalog?.matrices.find((m) => m.id === addEnvironment);
+  const loadingLabel = !mutationToken
+    ? "Connecting this browser…"
+    : revealing
+      ? "Revealing values…"
+      : catalog
+        ? "Refreshing secrets…"
+        : "Loading 1Password secrets…";
   return (
     <div className="app vault-app">
       <header>
@@ -592,14 +791,24 @@ export function VaultWorkspace({
         </a>
         <span
           className="local"
-          title={`1Password · ${catalog?.auth === "service-account" ? "Service account" : "Desktop authentication"}`}
+          title={`1Password · ${(catalog?.auth ?? document.querySelector<HTMLMetaElement>('meta[name="bev-auth"]')?.content) === "service-account" ? "Service account" : "Desktop authentication"}`}
         >
-          {catalog?.auth === "service-account"
+          {(catalog?.auth ??
+            document.querySelector<HTMLMetaElement>('meta[name="bev-auth"]')
+              ?.content) === "service-account"
             ? "Service account"
             : "1Password"}
         </span>
       </header>
       <main>
+        {startupError ? (
+          <div role="alert" className="alert error">
+            {startupError}
+            <Button variant="outline" onClick={() => location.reload()}>
+              Retry connection
+            </Button>
+          </div>
+        ) : null}
         {error ? (
           <div role="alert" className="alert error">
             {error}
@@ -670,7 +879,7 @@ export function VaultWorkspace({
             </label>
             <Input
               id="vault-search"
-              placeholder="Search secret names or environments…"
+              placeholder="Search secrets, environments, or notes…"
               value={search}
               onChange={(e) => {
                 activeCommit.current?.();
@@ -678,19 +887,32 @@ export function VaultWorkspace({
               }}
             />
           </div>
+          {(loading || readPending || revealing) && !startupError ? (
+            <div
+              className="loading-status toolbar-loading"
+              role="status"
+              aria-live="polite"
+              aria-label={loadingLabel}
+            >
+              <LoaderCircle className="size-4 animate-spin" />
+              <span>{loadingLabel}</span>
+            </div>
+          ) : null}
           <Button
             variant="outline"
             size="icon"
             aria-label="Refresh secrets"
             title="Refresh secrets"
-            disabled={loading}
+            disabled={loading || readPending || !mutationToken}
             onClick={() => {
               activeCommit.current?.();
               setDetails(undefined);
               void load(true);
             }}
           >
-            <RefreshCw className={loading ? "animate-spin" : undefined} />
+            <RefreshCw
+              className={loading || readPending ? "animate-spin" : undefined}
+            />
           </Button>
           <Button
             variant="outline"
@@ -718,94 +940,101 @@ export function VaultWorkspace({
             Add variable
           </Button>
         </div>
-        {loading && !catalog ? (
-          <p role="status">Loading secrets across environments…</p>
-        ) : null}
-        {catalog ? (
-          <section className="matrix-wrap">
-            <DataGrid
-              ref={grid}
-              className="environment-grid vault-grid rdg-light"
-              aria-label="Secrets across environments"
-              rows={filtered}
-              columns={columns}
-              onColumnResize={(column, width) =>
-                setResizedWidths((previous) => ({
-                  ...previous,
-                  [column.key]: width,
-                }))
+        <section className="matrix-wrap" aria-busy={loading || readPending}>
+          <DataGrid
+            ref={grid}
+            className="environment-grid vault-grid rdg-light"
+            aria-label="Secrets across environments"
+            rows={filtered}
+            sortColumns={sortColumns}
+            onSortColumnsChange={(next) => {
+              activeCommit.current?.();
+              grid.current?.setActivePosition({ rowIdx: -1, idx: 0 });
+              setSortColumns(next);
+            }}
+            columns={columns}
+            onColumnResize={(column, width) =>
+              setResizedWidths((previous) => ({
+                ...previous,
+                [column.key]: width,
+              }))
+            }
+            rowKeyGetter={(row) => row.id}
+            selectedRows={selected}
+            onSelectedRowsChange={setSelected}
+            rowHeight={36}
+            headerRowHeight={32}
+            style={{
+              height: `min(${Math.max(104, 32 + filtered.length * 36)}px, calc(100dvh - 182px))`,
+            }}
+            onCellKeyDown={(args, event) => {
+              if (args.mode === "EDIT") {
+                event.preventGridDefault();
+                return;
               }
-              rowKeyGetter={(row) => row.id}
-              selectedRows={selected}
-              onSelectedRowsChange={setSelected}
-              rowHeight={36}
-              headerRowHeight={32}
-              style={{
-                height: `min(${Math.max(104, 32 + filtered.length * 36)}px, calc(100dvh - 182px))`,
-              }}
-              onCellKeyDown={(args, event) => {
-                if (args.mode === "EDIT") {
-                  event.preventGridDefault();
-                  return;
-                }
-                if (
-                  (event.key === "Enter" || event.key === "F2") &&
-                  args.row &&
-                  args.column?.key === "value"
-                ) {
-                  event.preventDefault();
-                  event.preventGridDefault();
-                  args.setActivePosition(
-                    { rowIdx: args.rowIdx, idx: args.column.idx },
-                    { enableEditor: true },
-                  );
-                }
-              }}
-              onCellMouseDown={(event) => {
-                if (
-                  event.column.key !== "value" ||
-                  event.row.id !== activeRow.current
-                )
-                  activeCommit.current?.();
-              }}
-            />
-            <footer className="matrix-footer">
+              if (
+                (event.key === "Enter" || event.key === "F2") &&
+                args.row &&
+                (args.column?.key === "value" || args.column?.key === "notes")
+              ) {
+                event.preventDefault();
+                event.preventGridDefault();
+                args.setActivePosition(
+                  { rowIdx: args.rowIdx, idx: args.column.idx },
+                  { enableEditor: true },
+                );
+              }
+            }}
+            onCellMouseDown={(event) => {
+              if (
+                event.column.key !== activeField.current ||
+                event.row.id !== activeRow.current
+              )
+                activeCommit.current?.();
+            }}
+          />
+          <footer className="matrix-footer">
+            <span>
+              {catalog
+                ? `${filtered.length} of ${rows.length} secrets`
+                : "Waiting for 1Password…"}
+            </span>
+            {selected.size ? (
+              <>
+                <strong>{selected.size} selected</strong>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setSelected(new Set())}
+                >
+                  Clear selection
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  disabled={
+                    deleting || selected.size > 200 || pending.current.size > 0
+                  }
+                  onClick={() => {
+                    setConfirmation("");
+                    setDeleteRows(rows.filter((row) => selected.has(row.id)));
+                  }}
+                >
+                  <Trash2 />
+                  Delete selected
+                </Button>
+              </>
+            ) : (
               <span>
-                {filtered.length} of {rows.length} secrets
+                {catalog
+                  ? allVisible
+                    ? "Values visible"
+                    : "Values hidden"
+                  : ""}
               </span>
-              {selected.size ? (
-                <>
-                  <strong>{selected.size} selected</strong>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setSelected(new Set())}
-                  >
-                    Clear selection
-                  </Button>
-                  <Button
-                    variant="destructive"
-                    size="sm"
-                    disabled={
-                      deleting ||
-                      selected.size > 200 ||
-                      pending.current.size > 0
-                    }
-                    onClick={() => {
-                      setConfirmation("");
-                      setDeleteRows(rows.filter((row) => selected.has(row.id)));
-                    }}
-                  >
-                    <Trash2 />
-                    Delete selected
-                  </Button>
-                </>
-              ) : (
-                <span>{allVisible ? "Values visible" : "Values hidden"}</span>
-              )}
-            </footer>
-          </section>
-        ) : null}
+            )}
+          </footer>
+        </section>
         {catalog && !filtered.length ? (
           <p role="status">
             {rows.length
@@ -887,6 +1116,7 @@ export function VaultWorkspace({
                 vaultId: addingMatrix.id,
                 environment: env,
                 matrix: addingMatrix.matrix,
+                notes: "",
                 variable: { name: String(payload.name) },
               },
               payload,

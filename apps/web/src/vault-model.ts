@@ -18,6 +18,7 @@ export interface VaultRow {
   environment: VaultEnvironment;
   matrix: Matrix;
   variable: ResolvedVariable;
+  notes: string;
 }
 export function catalogRows(catalog: VaultCatalog): VaultRow[] {
   const environments = new Map(
@@ -31,6 +32,7 @@ export function catalogRows(catalog: VaultCatalog): VaultRow[] {
         environment: environments.get(id)!,
         matrix,
         variable,
+        notes: matrix.notes?.[variable.name] ?? "",
       })),
     )
     .sort(
@@ -50,11 +52,40 @@ export function filterVaultRows(
     (row) =>
       (!environments.size || environments.has(row.vaultId)) &&
       terms.every((term) =>
-        `${row.variable.name} ${row.environment.name} ${row.environment.account ?? ""}`
+        `${row.variable.name} ${row.environment.name} ${row.environment.account ?? ""} ${row.notes}`
           .toLowerCase()
           .includes(term),
       ),
   );
+}
+export function sortVaultRows(
+  rows: VaultRow[],
+  sortColumns: readonly { columnKey: string; direction: "ASC" | "DESC" }[],
+) {
+  const collator = new Intl.Collator(undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+  const text = (row: VaultRow, key: string) =>
+    key === "name"
+      ? row.variable.name
+      : key === "environment"
+        ? `${row.environment.name} ${row.environment.account ?? ""}`
+        : key === "notes"
+          ? row.notes
+          : key === "value"
+            ? (row.variable.value ?? "")
+            : "";
+  return [...rows].sort((left, right) => {
+    for (const sort of sortColumns) {
+      const order = collator.compare(
+        text(left, sort.columnKey),
+        text(right, sort.columnKey),
+      );
+      if (order) return sort.direction === "DESC" ? -order : order;
+    }
+    return 0;
+  });
 }
 export function maskCatalog(catalog: VaultCatalog): VaultCatalog {
   return {

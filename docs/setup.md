@@ -42,8 +42,9 @@ below.
 
 The secrets list shows every accessible environment together. Each vault is an
 isolated environment; matching names in different vaults appear as separate
-rows with their environment labels. Search secret names, environment names, and
-account metadata across the combined list. Environment filter buttons support
+rows with their environment labels. Search secret names, environment names, notes, and account metadata across the
+combined list. Click column headers to sort ascending or descending; Ctrl/Cmd-click
+adds a secondary sort. Values can be sorted after revealing them. Environment filter buttons support
 multiple selections; **All environments** clears the selection. Filtering and
 search run locally. **Refresh** rescans environments and reloads their secrets.
 
@@ -58,8 +59,13 @@ errors clear that cache; saves invalidate the edited cell. Nothing is persisted
 to browser storage. After the server's vault snapshot expires, a single-cell
 reveal reads only the selected credential through the SDK.
 
-The grid supports keyboard navigation, inline editing, reveal/hide, notes,
-adding variables, and confirmed single or bulk deletion. Each row edit, rename,
+Notes are visible in their own grid column and support inline editing, including
+multiline text with Alt+Enter. Notes-only saves preserve the credential value
+and do not require revealing it. Secret values remain masked until opened or
+explicitly revealed.
+
+The grid supports keyboard navigation, inline editing, reveal/hide, adding
+variables, and confirmed single or bulk deletion. Each row edit, rename,
 or deletion affects only its own environment. Creating a secret asks which
 environment it belongs to. Bulk deletion groups selected rows by environment,
 checks versions, and processes each environment separately. All values are
@@ -71,11 +77,18 @@ As in schema mode, variables are API Credential items with an environment-variab
 name and a single `credential` field. Login and other item categories are not
 environment variables and are excluded. A vault with invalid or duplicate API
 Credential names reports an error for that vault; other vaults remain available.
-Notes and values are returned only by the protected reveal flow.
+Notes are included in the authenticated grid response. Secret values are
+returned only by the protected reveal flow.
 
 An explicit schema path must exist and be valid; a missing or invalid supplied
 schema never falls back to vault discovery. Export, check, explain, and run still
 use `.env.schema` for validation and environment resolution.
+
+The initial loading view uses the mode selected at launch. Vault browsing never
+falls back to a schema view while waiting for 1Password. Visible loading
+indicators distinguish browser connection, initial secret loading, refreshes,
+and value reveals; field spinners show saves in progress. Schema mode also
+shows a loading state before its environment values are ready.
 
 ### 1Password connection modes
 

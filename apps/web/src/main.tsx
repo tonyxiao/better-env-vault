@@ -69,10 +69,16 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 
 function App() {
   const [projects, setProjects] = useState<Project[]>([]);
-  const [vaultMode, setVaultMode] = useState(false);
+  const [vaultMode, setVaultMode] = useState(
+    () =>
+      document.querySelector<HTMLMetaElement>('meta[name="bev-mode"]')
+        ?.content === "vault",
+  );
+  const [connecting, setConnecting] = useState(true);
   const [project, setProject] = useState("");
   const [matrix, setMatrix] = useState<Matrix>();
   const [busy, setBusy] = useState(false);
+  const [readPending, setReadPending] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [needsConnection, setNeedsConnection] = useState(false);
@@ -111,6 +117,7 @@ function App() {
     setModal(undefined);
     setError("");
     setNotice("");
+    setReadPending(false);
     setOperations({});
     setSelectedRows(new Set());
     setGridResetEpoch((epoch) => epoch + 1);
@@ -132,35 +139,37 @@ function App() {
     if (launchToken) history.replaceState(null, "", location.pathname);
     void (async () => {
       try {
-        if (launchToken) {
-          try {
-            await request("/api/session", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ token: launchToken }),
-            });
-          } catch (error) {
-            if (!(error instanceof ApiError && error.code === "session"))
-              throw error;
-          }
-        }
-        const response = await request<{
-          projects: Project[];
+        const session = await request<{
+          mode: "vault" | "schema";
           mutationToken: string;
-          mode?: "schema" | "vault";
-        }>("/api/projects");
-        if (cancelled) return;
-        token.current = response.mutationToken;
-        setVaultMode(response.mode === "vault");
-        setProjects(response.projects);
-        setProject(
-          response.mode === "vault" ? "" : (response.projects[0]?.id ?? ""),
+        }>(
+          "/api/session",
+          launchToken
+            ? {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ token: launchToken }),
+              }
+            : undefined,
         );
+        if (cancelled) return;
+        token.current = session.mutationToken;
+        setVaultMode(session.mode === "vault");
+        if (session.mode === "schema") {
+          const response = await request<{ projects: Project[] }>(
+            "/api/projects",
+          );
+          if (cancelled) return;
+          setProjects(response.projects);
+          setProject(response.projects[0]?.id ?? "");
+        }
+        setConnecting(false);
       } catch (error) {
         if (!cancelled) {
           if (error instanceof ApiError && error.code === "session")
             disconnect();
           else setError((error as Error).message);
+          setConnecting(false);
         }
       }
     })();
@@ -174,6 +183,7 @@ function App() {
       if (!project) return;
       const id = ++loadId.current;
       if (!quiet) setBusy(true);
+      setReadPending(true);
       setError("");
       const generation = visibilityGeneration.current;
       try {
@@ -231,7 +241,10 @@ function App() {
           else setError((error as Error).message);
         }
       } finally {
-        if (!quiet && loadId.current === id) setBusy(false);
+        if (loadId.current === id) {
+          setBusy(false);
+          setReadPending(false);
+        }
       }
     },
     [project, disconnect],
@@ -525,7 +538,36 @@ function App() {
     );
   if (vaultMode)
     return (
-      <VaultWorkspace mutationToken={token.current} onDisconnect={disconnect} />
+      <VaultWorkspace
+        mutationToken={token.current}
+        startupError={error}
+        onDisconnect={disconnect}
+      />
+    );
+  if (connecting || !token.current)
+    return (
+      <div className="app schema-app">
+        <header>
+          <a className="brand" href="/">
+            <span className="mark">E</span>Better Env Vault
+          </a>
+        </header>
+        <main>
+          {error ? (
+            <div role="alert" className="alert error">
+              {error}
+              <Button variant="outline" onClick={() => location.reload()}>
+                Retry connection
+              </Button>
+            </div>
+          ) : (
+            <div role="status" className="loading-status">
+              <LoaderCircle className="size-4 animate-spin" />
+              Opening workspace…
+            </div>
+          )}
+        </main>
+      </div>
     );
   return (
     <div className="app schema-app">
@@ -631,6 +673,16 @@ function App() {
               }}
             />
           </div>
+          {readPending ? (
+            <div
+              role="status"
+              aria-label="Loading environment values"
+              className="loading-status toolbar-loading"
+            >
+              <LoaderCircle className="size-4 animate-spin" />
+              <span>Loading environment values…</span>
+            </div>
+          ) : null}
           {!vaultMode ? (
             <label className="filter">
               Show{" "}

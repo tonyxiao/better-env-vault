@@ -5,6 +5,8 @@ import {
   type Column,
   type DataGridHandle,
   type RenderEditCellProps,
+  type SortColumn,
+  type RenderHeaderCellProps,
 } from "react-data-grid";
 import "react-data-grid/lib/styles.css";
 import { Info, LoaderCircle, RotateCcw } from "lucide-react";
@@ -187,7 +189,8 @@ export function MatrixGrid(props: Props) {
     query.addEventListener("change", change);
     return () => query.removeEventListener("change", change);
   }, []);
-  const rows = useMemo(() => {
+  const [sortColumns, setSortColumns] = useState<readonly SortColumn[]>([]);
+  const unsortedRows = useMemo(() => {
     const environments = new Map(
       displayMatrix.resolutions.map((resolution) => [
         resolution.environment,
@@ -207,6 +210,27 @@ export function MatrixGrid(props: Props) {
       ),
     }));
   }, [variables, matrix.environments, displayMatrix]);
+  const rows = useMemo(
+    () =>
+      [...unsortedRows].sort((left, right) => {
+        for (const sort of sortColumns) {
+          const value = (row: GridRow) =>
+            sort.columnKey === "variable"
+              ? row.name
+              : sort.columnKey === "schema"
+                ? (row.definition.defaultValue ?? "")
+                : allVisible
+                  ? (row.cells[sort.columnKey]?.value ?? "")
+                  : "";
+          const order = value(left).localeCompare(value(right), undefined, {
+            numeric: true,
+          });
+          if (order) return sort.direction === "DESC" ? -order : order;
+        }
+        return 0;
+      }),
+    [unsortedRows, sortColumns, allVisible],
+  );
   useEffect(() => {
     grid.current?.setActivePosition({ rowIdx: -1, idx: 0 });
   }, [resetEpoch]);
@@ -377,13 +401,20 @@ export function MatrixGrid(props: Props) {
     {
       key: "variable",
       name: "Variable",
+      sortable: true,
       width: freezeVariables ? 260 : 180,
       minWidth: 180,
       frozen: freezeVariables,
       resizable: true,
-      renderHeaderCell: () => (
+      renderHeaderCell: ({ sortDirection }) => (
         <span>
           Variable <span className="variable-count">{variables.length}</span>
+          {sortDirection ? (
+            <span aria-hidden="true">
+              {" "}
+              {sortDirection === "ASC" ? "↑" : "↓"}
+            </span>
+          ) : null}
         </span>
       ),
       renderCell: ({ row }) => (
@@ -424,6 +455,7 @@ export function MatrixGrid(props: Props) {
     ].map((environment) => ({
       key: environment,
       name: environment === "schema" ? "Schema default" : environment,
+      sortable: environment === "schema" || allVisible,
       minWidth: 220,
       resizable: true,
       cellClass: (row: GridRow) => {
@@ -435,7 +467,7 @@ export function MatrixGrid(props: Props) {
         commitOnOutsideClick: false,
         closeOnExternalRowChange: false,
       },
-      renderHeaderCell: () => {
+      renderHeaderCell: ({ sortDirection }: RenderHeaderCellProps<GridRow>) => {
         const vault = matrix.vaults?.[environment];
         const id = vault?.id ?? matrix.config.environments[environment]?.vault;
         const description =
@@ -463,6 +495,11 @@ export function MatrixGrid(props: Props) {
                     ? (vault?.name ?? "Vault")
                     : environment}
               </strong>
+              {sortDirection ? (
+                <span aria-hidden="true">
+                  {sortDirection === "ASC" ? "↑" : "↓"}
+                </span>
+              ) : null}
               {environment !== "schema" ? (
                 <Tooltip disableHoverableContent>
                   <TooltipTrigger asChild>
@@ -529,6 +566,12 @@ export function MatrixGrid(props: Props) {
       aria-label="Environment values"
       columns={columns}
       rows={rows}
+      sortColumns={sortColumns}
+      onSortColumnsChange={(next) => {
+        activeEdit.current?.commit();
+        grid.current?.setActivePosition({ rowIdx: -1, idx: 0 });
+        setSortColumns(next);
+      }}
       rowKeyGetter={(row) => row.name}
       selectedRows={selectedRows}
       onSelectedRowsChange={onSelectedRowsChange}

@@ -73,6 +73,12 @@ export async function startServer(options: {
   const browser = options.discovery
     ? new VaultBrowser(options.discovery, options.provider)
     : undefined;
+  const launchAuth =
+    options.discovery?.auth ??
+    (options.discovery?.serviceAccountKeychain ||
+    process.env.OP_SERVICE_ACCOUNT_TOKEN
+      ? "service-account"
+      : "desktop");
   const providers = new Map<
     string,
     { fingerprint: string; pending: Promise<Provider> }
@@ -142,7 +148,11 @@ export async function startServer(options: {
         // A used bookmark must not disconnect a browser that already has a
         // valid session. The same link still cannot authorize another browser.
         if (connected) {
-          json(response, 200, { connected: true });
+          json(response, 200, {
+            connected: true,
+            mode: browser ? "vault" : "schema",
+            mutationToken,
+          });
           return;
         }
         const match =
@@ -163,7 +173,11 @@ export async function startServer(options: {
           "Set-Cookie",
           `${cookieName}=${credential}; HttpOnly; SameSite=Strict; Path=/`,
         );
-        json(response, 200, { connected: true });
+        json(response, 200, {
+          connected: true,
+          mode: browser ? "vault" : "schema",
+          mutationToken,
+        });
         return;
       }
       if (url.pathname.startsWith("/api/")) {
@@ -185,6 +199,14 @@ export async function startServer(options: {
               "request",
               403,
             );
+        }
+        if (url.pathname === "/api/session" && request.method === "GET") {
+          json(response, 200, {
+            connected: true,
+            mode: browser ? "vault" : "schema",
+            mutationToken,
+          });
+          return;
         }
         if (url.pathname === "/api/projects" && request.method === "GET") {
           json(response, 200, {
@@ -503,7 +525,17 @@ export async function startServer(options: {
       // Radix scroll-lock styles receive a per-document nonce; scripts stay self-only.
       response.end(
         file === "index.html"
-          ? contents.toString("utf8").replace("BEV_STYLE_NONCE", styleNonce)
+          ? contents
+              .toString("utf8")
+              .replace("BEV_STYLE_NONCE", styleNonce)
+              .replace("BEV_MODE", browser ? "vault" : "schema")
+              .replace("BEV_AUTH", launchAuth)
+              .replace(
+                "BEV_LOADING_LABEL",
+                browser
+                  ? "Loading 1Password secrets…"
+                  : "Loading schema workspace…",
+              )
           : contents,
       );
     } catch (error) {

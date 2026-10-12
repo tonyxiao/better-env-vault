@@ -14,6 +14,7 @@ export interface Matrix {
   resolutions: Resolution[];
   versions: Record<string, Record<string, number | null>>;
   editableValues?: Record<string, Record<string, string | undefined>>;
+  notes?: Record<string, string>;
 }
 export interface Cell {
   environment: string;

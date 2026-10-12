@@ -24,7 +24,33 @@ try {
     if (new URL(request.url()).pathname === "/api/reveal") cellReads++;
   });
   page.on("pageerror", (error) => errors.push(error.message));
+  let releaseInitial!: () => void;
+  const initialGate = new Promise<void>(
+    (resolve) => (releaseInitial = resolve),
+  );
+  let gateInitial = true;
+  await page.route("**/api/catalog", async (route) => {
+    if (gateInitial) await initialGate;
+    await route.continue();
+  });
   await page.goto(app.launchUrl);
+  await page
+    .getByRole("status")
+    .filter({ hasText: "Loading 1Password secrets" })
+    .waitFor();
+  assert.equal(
+    await page
+      .getByRole("columnheader", { name: "Notes", exact: true })
+      .count(),
+    1,
+  );
+  assert.equal(
+    await page.getByRole("button", { name: "Schema settings" }).count(),
+    0,
+  );
+  assert.ok(!(await page.locator("body").innerText()).includes(".env.schema"));
+  gateInitial = false;
+  releaseInitial();
   const infraCell = page.getByRole("button", {
     name: "Edit TOKEN in infra",
     exact: true,
@@ -46,6 +72,43 @@ try {
   assert.ok(
     !(await page.locator("body").innerText()).includes("infra-fixture"),
   );
+  const readsBeforeNotes = cellReads;
+  const notesCell = page.getByRole("button", {
+    name: "Edit notes for TOKEN in infra",
+    exact: true,
+  });
+  await notesCell.getByText("original notes", { exact: true }).waitFor();
+  await notesCell.click();
+  const notesInput = page.getByRole("textbox", {
+    name: "Notes for TOKEN in infra",
+    exact: true,
+  });
+  assert.equal(await notesInput.inputValue(), "original notes");
+  await notesInput.fill("Edited inline notes");
+  await notesInput.press("Enter");
+  await page
+    .getByRole("status")
+    .filter({ hasText: "Saved notes for TOKEN in infra" })
+    .waitFor();
+  assert.equal(provider.vaults[infra][0].notes, "Edited inline notes");
+  assert.equal(provider.vaults[infra][0].value, "infra-fixture");
+  assert.equal(
+    cellReads,
+    readsBeforeNotes,
+    "Notes editing must not reveal or fetch the secret value",
+  );
+  await page.keyboard.press("Escape");
+  await page
+    .getByRole("columnheader", { name: "Environment", exact: true })
+    .click();
+  await page
+    .getByRole("columnheader", { name: "Environment", exact: true })
+    .click();
+  assert.ok(
+    (await page.getByRole("row").nth(1).innerText()).includes("jewelry"),
+    "Descending environment sort should put jewelry first",
+  );
+  await page.getByRole("columnheader", { name: "Secret", exact: true }).click();
   const search = page.getByRole("textbox", {
     name: "Search secrets across environments",
     exact: true,
