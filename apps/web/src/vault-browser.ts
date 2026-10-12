@@ -12,7 +12,11 @@ import {
   connectDiscovery,
   type DiscoveryOptions,
 } from "../../../packages/core/src/discovery.js";
-import { conflict, VaultError } from "../../../packages/core/src/errors.js";
+import {
+  conflict,
+  safeError,
+  VaultError,
+} from "../../../packages/core/src/errors.js";
 import {
   publicResolution,
   type Resolution,
@@ -136,6 +140,55 @@ export class VaultBrowser {
       },
       fresh,
     );
+  }
+  async catalog(fresh = false, fingerprints?: Record<string, string>) {
+    const environments = await this.projects();
+    const matrices: {
+      id: string;
+      matrix: Awaited<ReturnType<VaultBrowser["matrix"]>>;
+    }[] = [];
+    const errors: { id: string; name: string; error: string }[] = [];
+    // Bound requests while reading every environment, including empty vaults.
+    for (let offset = 0; offset < environments.length; offset += 2) {
+      await Promise.all(
+        environments.slice(offset, offset + 2).map(async (env) => {
+          try {
+            matrices.push({
+              id: env.id,
+              matrix: await this.matrix(
+                env.id,
+                fingerprints !== undefined &&
+                  Object.hasOwn(fingerprints, env.id),
+                fingerprints?.[env.id],
+                fresh,
+              ),
+            });
+          } catch (error) {
+            if (
+              error instanceof VaultError &&
+              ["conflict", "authentication"].includes(error.code)
+            )
+              throw error;
+            errors.push({
+              id: env.id,
+              name: env.name,
+              error: safeError(error),
+            });
+          }
+        }),
+      );
+    }
+    return {
+      environments,
+      matrices,
+      errors,
+      auth:
+        this.options.auth ??
+        (this.options.serviceAccountKeychain ||
+        process.env.OP_SERVICE_ACCOUNT_TOKEN
+          ? "service-account"
+          : "desktop"),
+    };
   }
   async matrix(id: string, reveal: boolean, expected?: string, fresh = false) {
     const vault = this.vault(id);

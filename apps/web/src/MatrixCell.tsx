@@ -26,6 +26,7 @@ export type EditDirection = "next" | "previous" | "down" | "up";
 export function SpreadsheetEditor({
   variable,
   environment,
+  origin,
   hideEpoch,
   initialValue,
   draftValue,
@@ -38,6 +39,7 @@ export function SpreadsheetEditor({
 }: {
   variable: ResolvedVariable;
   environment: string;
+  origin?: string;
   hideEpoch: number;
   initialValue?: { value?: string };
   draftValue?: string;
@@ -258,7 +260,10 @@ export function SpreadsheetEditor({
         </span>
       ) : (
         <span className="spreadsheet-caption origin">
-          {environment === "schema" ? "Schema default" : originLabel(variable)}
+          {origin ??
+            (environment === "schema"
+              ? "Schema default"
+              : originLabel(variable))}
         </span>
       )}
     </form>

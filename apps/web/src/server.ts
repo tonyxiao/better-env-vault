@@ -208,7 +208,37 @@ export async function startServer(options: {
         if (browser) {
           const id = url.searchParams.get("project") ?? "";
           try {
-            if (url.pathname === "/api/matrix" && request.method === "GET")
+            if (url.pathname === "/api/catalog" && request.method === "GET")
+              json(
+                response,
+                200,
+                await browser.catalog(url.searchParams.get("fresh") === "1"),
+              );
+            else if (
+              url.pathname === "/api/catalog/reveal" &&
+              request.method === "POST"
+            ) {
+              const data = (await body(request)) as {
+                fingerprints?: Record<string, string>;
+              };
+              if (
+                !data?.fingerprints ||
+                typeof data.fingerprints !== "object" ||
+                Array.isArray(data.fingerprints) ||
+                Object.values(data.fingerprints).some(
+                  (value) => typeof value !== "string",
+                )
+              )
+                throw new VaultError("Invalid reveal request.");
+              json(
+                response,
+                200,
+                await browser.catalog(false, data.fingerprints),
+              );
+            } else if (
+              url.pathname === "/api/matrix" &&
+              request.method === "GET"
+            )
               json(
                 response,
                 200,

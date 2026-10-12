@@ -21,86 +21,101 @@ try {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(app.launchUrl);
-  const vault = page.getByRole("combobox", { name: "Vault", exact: true });
-  await vault.waitFor();
-  await page
-    .getByRole("button", { name: "Edit TOKEN in vault", exact: true })
-    .waitFor();
+  const infraCell = page.getByRole("button", {
+    name: "Edit TOKEN in infra",
+    exact: true,
+  });
+  const jewelryCell = page.getByRole("button", {
+    name: "Edit TOKEN in jewelry",
+    exact: true,
+  });
+  await infraCell.waitFor();
+  await jewelryCell.waitFor();
   assert.equal(
-    await page.getByRole("columnheader", { name: /Schema default/ }).count(),
+    await page.getByRole("combobox", { name: "Vault", exact: true }).count(),
     0,
   );
   assert.equal(
     await page.getByRole("button", { name: "Schema settings" }).count(),
     0,
   );
-  assert.ok(!(await page.locator("body").innerText()).includes("Inherits"));
   assert.ok(
     !(await page.locator("body").innerText()).includes("infra-fixture"),
   );
-  await page
-    .getByRole("textbox", { name: "Search variables", exact: true })
-    .fill("absent");
-  assert.equal(
-    await page
-      .getByRole("button", { name: "Edit TOKEN in vault", exact: true })
-      .count(),
-    0,
-  );
-  await page
-    .getByRole("textbox", { name: "Search variables", exact: true })
-    .fill("TOKEN");
-  await page
-    .getByRole("button", { name: "Edit TOKEN in vault", exact: true })
-    .click();
-  const input = page.getByRole("textbox", {
-    name: "TOKEN value in vault",
+  const search = page.getByRole("textbox", {
+    name: "Search secrets across environments",
     exact: true,
   });
-  await input.waitFor();
+  await search.fill("jewelry token");
+  await jewelryCell.waitFor();
+  assert.equal(await infraCell.count(), 0);
+  await search.fill("TOKEN");
+  await infraCell.waitFor();
+  await jewelryCell.waitFor();
+  await page
+    .getByRole("button", { name: "Filter environment infra", exact: true })
+    .click();
+  await infraCell.waitFor();
+  assert.equal(await jewelryCell.count(), 0);
+  await page
+    .getByRole("button", { name: "Filter environment jewelry", exact: true })
+    .click();
+  await jewelryCell.waitFor();
+  await infraCell.waitFor();
+  await page
+    .getByRole("button", { name: "All environments", exact: true })
+    .click();
+  await infraCell.click();
+  const field = page.getByRole("textbox", {
+    name: "TOKEN value in infra",
+    exact: true,
+  });
+  await field.waitFor();
   await page.waitForFunction(
     () =>
       (
         document.querySelector(
-          'textarea[aria-label="TOKEN value in vault"]',
+          'textarea[aria-label="TOKEN value in infra"]',
         ) as HTMLTextAreaElement
       )?.value === "infra-fixture",
   );
-  await input.fill("infra-edited");
-  await input.press("Enter");
-  await page.getByRole("status").filter({ hasText: "Saved" }).waitFor();
+  await field.fill("infra-edited");
+  await field.press("Enter");
+  await page
+    .getByRole("status")
+    .filter({ hasText: "Saved TOKEN in infra" })
+    .waitFor();
   assert.equal(provider.vaults[infra][0].value, "infra-edited");
   assert.equal(provider.vaults[jewelry][0].value, "jewelry-fixture");
+  await page.keyboard.press("Escape");
   await page
     .getByRole("button", { name: "Reveal all values", exact: true })
     .click();
+  await infraCell.getByText("infra-edited", { exact: true }).waitFor();
+  await jewelryCell.getByText("jewelry-fixture", { exact: true }).waitFor();
   await page
-    .getByRole("button", { name: "Edit TOKEN in vault", exact: true })
-    .getByText("infra-edited", { exact: true })
-    .waitFor();
-  await vault.selectOption(jewelry);
-  await page
-    .getByRole("button", { name: "Edit TOKEN in vault", exact: true })
-    .waitFor();
+    .getByRole("button", { name: "Hide all values", exact: true })
+    .click();
   assert.ok(!(await page.locator("body").innerText()).includes("infra-edited"));
   assert.ok(
     !(await page.locator("body").innerText()).includes("jewelry-fixture"),
   );
-  await vault.selectOption(empty);
   await page
-    .getByText("This vault has no API Credential variables yet.", {
-      exact: false,
+    .getByRole("button", {
+      name: "Filter environment money-redux",
+      exact: true,
+    })
+    .click();
+  await page
+    .getByText("No secrets match your search and environment filters.", {
+      exact: true,
     })
     .waitFor();
-  await page
-    .getByRole("textbox", { name: "Search variables", exact: true })
-    .fill("");
+  await search.fill("");
   await page.getByRole("button", { name: "Add variable", exact: true }).click();
-  const dialog = page.getByRole("dialog");
-  assert.equal(
-    await dialog.getByRole("textbox", { name: "Type", exact: true }).count(),
-    0,
-  );
+  let dialog = page.getByRole("dialog");
+  await dialog.getByRole("button", { name: "Continue", exact: true }).click();
+  dialog = page.getByRole("dialog");
   await dialog
     .getByRole("textbox", { name: "Variable name", exact: true })
     .fill("NEW_SECRET");
@@ -114,12 +129,15 @@ try {
     .getByRole("button", { name: "Create secret", exact: true })
     .click();
   await page
-    .getByRole("button", { name: "Edit NEW_SECRET in vault", exact: true })
+    .getByRole("button", {
+      name: "Edit NEW_SECRET in money-redux",
+      exact: true,
+    })
     .waitFor();
   assert.equal(provider.vaults[empty][0].value, "new-fixture");
   await page
     .getByRole("button", {
-      name: "Details for NEW_SECRET in vault",
+      name: "Details for NEW_SECRET in money-redux",
       exact: true,
     })
     .click();
@@ -133,10 +151,13 @@ try {
     .getByRole("button", { name: "Save change", exact: true })
     .click();
   await page
-    .getByRole("button", { name: "Edit RENAMED in vault", exact: true })
+    .getByRole("button", { name: "Edit RENAMED in money-redux", exact: true })
     .waitFor();
   await page
-    .getByRole("button", { name: "Details for RENAMED in vault", exact: true })
+    .getByRole("button", {
+      name: "Details for RENAMED in money-redux",
+      exact: true,
+    })
     .click();
   await dialog
     .getByRole("combobox", { name: "Change", exact: true })
@@ -148,16 +169,40 @@ try {
     .getByRole("button", { name: "Delete from this vault", exact: true })
     .click();
   await page
-    .getByText("This vault has no API Credential variables yet.", {
-      exact: false,
+    .getByText("No secrets match your search and environment filters.", {
+      exact: true,
     })
     .waitFor();
   assert.equal(provider.vaults[empty].length, 0);
   assert.equal(provider.vaults[infra][0].value, "infra-edited");
   assert.equal(provider.vaults[jewelry][0].value, "jewelry-fixture");
+  await page
+    .getByRole("button", { name: "All environments", exact: true })
+    .click();
+  await infraCell.waitFor();
+  await jewelryCell.waitFor();
+  await page
+    .getByRole("grid", { name: "Secrets across environments" })
+    .getByRole("checkbox", { name: "Select All", exact: true })
+    .check();
+  await page
+    .getByRole("button", { name: "Delete selected", exact: true })
+    .click();
+  await dialog
+    .getByRole("textbox", { name: "Type DELETE to confirm", exact: true })
+    .fill("DELETE");
+  await dialog
+    .getByRole("button", { name: "Delete secrets", exact: true })
+    .click();
+  await page
+    .getByRole("status")
+    .filter({ hasText: "Deleted 2 secrets" })
+    .waitFor();
+  assert.equal(provider.vaults[infra].length, 0);
+  assert.equal(provider.vaults[jewelry].length, 0);
   assert.deepEqual(errors, []);
   console.log(
-    "Vault UI checks passed: isolation, search, inline editing, masking, empty vaults, create, rename, and delete.",
+    "Combined vault UI passed: cross-environment search, multiple filters, duplicate names, inline editing, masking, create, rename, and cross-environment deletion.",
   );
 } finally {
   await browser.close();

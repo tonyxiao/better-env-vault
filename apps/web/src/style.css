@@ -688,3 +688,25 @@ main {
     padding-inline: 6px;
   }
 }
+
+.vault-summary {
+  @apply mb-5 flex flex-wrap justify-between gap-2 text-xs text-muted-foreground;
+}
+.environment-filters {
+  @apply mb-5 flex flex-wrap items-center gap-2;
+}
+.filter-count {
+  @apply ml-1 rounded bg-background/20 px-1.5 text-xs;
+}
+.vault-environment-cell {
+  @apply flex h-full min-w-0 flex-col justify-center gap-1;
+}
+.vault-environment-cell strong {
+  @apply truncate text-xs font-medium;
+}
+.vault-environment-cell span {
+  @apply truncate text-[10px] text-muted-foreground;
+}
+.vault-grid {
+  min-height: 240px;
+}

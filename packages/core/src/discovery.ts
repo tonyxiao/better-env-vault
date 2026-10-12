@@ -9,6 +9,7 @@ import {
 import { VaultError } from "./errors.js";
 
 export interface DiscoveryOptions {
+  auth?: "desktop" | "service-account";
   account?: string;
   serviceAccountKeychain?: string;
 }
@@ -41,8 +42,14 @@ export async function discoverAccounts(account?: string): Promise<string[]> {
 export async function connectDiscovery(
   options: DiscoveryOptions,
 ): Promise<Provider> {
-  const serviceAccount =
-    !!options.serviceAccountKeychain || !!process.env.OP_SERVICE_ACCOUNT_TOKEN;
+  if (options.auth === "desktop" && options.serviceAccountKeychain)
+    throw new VaultError(
+      "Choose desktop authentication or a service-account Keychain entry.",
+    );
+  const serviceAccount = options.auth
+    ? options.auth === "service-account"
+    : !!options.serviceAccountKeychain ||
+      !!process.env.OP_SERVICE_ACCOUNT_TOKEN;
   const accounts = serviceAccount
     ? [options.account ?? "service-account"]
     : await discoverAccounts(options.account);

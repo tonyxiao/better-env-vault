@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { safeError, VaultError } from "../../core/src/errors.js";
 import { serve, webOptions } from "./serve.js";
 import { authCommand } from "./auth.js";
@@ -14,6 +14,12 @@ const program = webOptions(
     )
     .argument("[schema]", "Path to .env.schema")
     .option("--vaults", "Browse 1Password vaults even when a schema is present")
+    .addOption(
+      new Option(
+        "--auth <mode>",
+        "1Password authentication for vault browsing",
+      ).choices(["desktop", "service-account"]),
+    )
     .option(
       "--account <account>",
       "1Password account name or UUID for vault browsing",
@@ -38,12 +44,20 @@ program.action(async (schema: string | undefined, options) => {
       discovery = true;
     }
   }
+  if (
+    !discovery &&
+    (options.auth || options.account || options.serviceAccountKeychain)
+  )
+    throw new VaultError(
+      "Use --vaults with authentication options. Schema mode uses its .env.schema settings.",
+    );
   await serve({
     ...options,
     schemas: discovery ? [] : [schema ?? ".env.schema"],
     ...(discovery
       ? {
           discovery: {
+            auth: options.auth,
             account: options.account,
             serviceAccountKeychain: options.serviceAccountKeychain,
           },

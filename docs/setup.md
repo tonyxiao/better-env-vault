@@ -28,8 +28,8 @@ Run `better-env-vault --help` for the available commands. For development, use
 ```bash
 envault                               # browses vaults when .env.schema is absent
 envault --vaults                      # always browse vaults
-envault --vaults --account <account-uuid>
-envault --vaults --service-account-keychain <entry-name>
+envault --vaults --auth desktop --account <account-uuid>
+envault --vaults --auth service-account --service-account-keychain <entry-name>
 ```
 
 Desktop discovery uses `op account list --format json` to find accounts, then
@@ -40,27 +40,51 @@ service-account authentication and lists only the token's accessible vaults.
 Use `envault auth store <entry-name>` to store a token through stdin as described
 below.
 
-Choose a **Vault** to view its variables. Each vault is an isolated environment;
-matching names in other vaults are independent. Discovery reads vault metadata
-first and loads values only for the selected vault. **Refresh** rescans the
-available vaults and reloads the selected vault.
+The secrets list shows every accessible environment together. Each vault is an
+isolated environment; matching names in different vaults appear as separate
+rows with their environment labels. Search secret names, environment names, and
+account metadata across the combined list. Environment filter buttons support
+multiple selections; **All environments** clears the selection. Filtering and
+search run locally. **Refresh** rescans environments and reloads their secrets.
 
-The grid supports name search, keyboard navigation, inline editing, reveal/hide,
-notes, adding variables, and confirmed single or bulk deletion. Rename and delete
-affect only the selected vault. All values are treated as sensitive. No schema
-file is written, and there are no defaults, inheritance, type decorators, or
+Reads run two vaults at a time and use the existing 30-second memory cache. A
+malformed or inaccessible vault reports an error beside the combined list while
+other environments remain available. Values stay masked by default. Revealing
+all values reveals the selected environments; hiding values or changing
+filters clears revealed values.
+
+The grid supports keyboard navigation, inline editing, reveal/hide, notes,
+adding variables, and confirmed single or bulk deletion. Each row edit, rename,
+or deletion affects only its own environment. Creating a secret asks which
+environment it belongs to. Bulk deletion groups selected rows by environment,
+checks versions, and processes each environment separately. All values are
+treated as sensitive. No schema file is written, and there are no defaults, inheritance, type decorators, or
 schema settings. Bulk deletion checks versions before removing any items and
 attempts restoration on failure.
 
 As in schema mode, variables are API Credential items with an environment-variable
 name and a single `credential` field. Login and other item categories are not
 environment variables and are excluded. A vault with invalid or duplicate API
-Credential names reports an error for that vault; other vaults remain selectable.
+Credential names reports an error for that vault; other vaults remain available.
 Notes and values are returned only by the protected reveal flow.
 
 An explicit schema path must exist and be valid; a missing or invalid supplied
 schema never falls back to vault discovery. Export, check, explain, and run still
 use `.env.schema` for validation and environment resolution.
+
+### 1Password connection modes
+
+Envault connects directly to 1Password through `@1password/sdk`; its local web
+server is an HTTP application server, not an MCP server. No MCP connection is
+configured or implied by either authentication mode.
+
+`--auth desktop` explicitly selects desktop authentication, even if an ambient
+`OP_SERVICE_ACCOUNT_TOKEN` is present. `--auth service-account` explicitly selects
+service-account authentication; provide the token through the process
+environment or a named macOS Keychain entry. If `--auth` is omitted, a token or
+Keychain entry selects service-account mode, otherwise desktop mode is used.
+Authentication options apply to `--vaults`; schema mode uses the schema's
+settings.
 
 ## One schema per project
 

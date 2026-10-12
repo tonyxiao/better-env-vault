@@ -31,7 +31,8 @@ envault /path/to/.env.schema
 
 Run `envault` without a path to use `.env.schema` in the current directory.
 If that file is absent, it discovers accessible 1Password vaults and opens each
-as an independent environment. Use `envault --vaults` to browse vaults even in
+as an independent environment in a combined searchable list with environment
+filters. Use `envault --vaults` to browse vaults even in
 a directory with a schema, or `envault --vaults --account <account-uuid>` to
 select an account. Automatic desktop account discovery requires the `op` CLI.
 The CLI opens your browser and keeps the server in the foreground; Ctrl+C or
