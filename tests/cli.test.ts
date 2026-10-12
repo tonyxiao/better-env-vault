@@ -146,6 +146,8 @@ it.each(["SIGINT", "SIGTERM", "SIGHUP", "SIGKILL"] as const)(
       expect(projects.projects[0].schemaPath).toBe(schema.path);
       const address = new URL(url);
       socket = connect(Number(address.port), address.hostname);
+      // SIGKILL may reset the connection before the socket is destroyed.
+      socket.on("error", () => {});
       await once(socket, "connect");
       socket.write(`GET / HTTP/1.1\r\nHost: ${address.host}\r\n`);
       app.child.kill(signal);
@@ -237,4 +239,22 @@ it("exposes Keychain auth commands and rejects invalid stdin without echoing it"
   expect(command.output().stdout + command.output().stderr).not.toContain(
     "not-a-valid-secret-token",
   );
+});
+
+it("starts vault discovery without a schema and supports an explicit account", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "bev-vault-cli-"));
+  const app = envault(
+    ["--account", "example-account", "--no-open", "--print-launch-url"],
+    { cwd: directory },
+  );
+  try {
+    await app.ready(true);
+    expect(app.output().stderr).not.toContain("Cannot read");
+    app.child.kill("SIGINT");
+    expect((await app.closed)[0]).toBe(0);
+  } finally {
+    if (app.child.exitCode === null && app.child.signalCode === null)
+      app.child.kill("SIGKILL");
+    await app.closed;
+  }
 });

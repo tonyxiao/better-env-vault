@@ -20,6 +20,8 @@ import {
 import { applyEdit, applyDeleteMany } from "../../../packages/core/src/edit.js";
 import { safeError, VaultError } from "../../../packages/core/src/errors.js";
 import { SnapshotCache } from "./snapshot-cache.js";
+import { VaultBrowser } from "./vault-browser.js";
+import type { DiscoveryOptions } from "../../../packages/core/src/discovery.js";
 import type {
   VaultSnapshot,
   Resolution,
@@ -57,8 +59,9 @@ export async function startServer(options: {
   port?: number;
   provider?: Provider;
   staticDirectory?: string;
+  discovery?: DiscoveryOptions;
 }) {
-  if (!options.schemas.length)
+  if (!options.schemas.length && !options.discovery)
     throw new VaultError("Select at least one schema.");
   const schemas = await Promise.all(
     options.schemas.map((path) => loadSchema(path)),
@@ -67,6 +70,9 @@ export async function startServer(options: {
     id: String(index),
     path: schema.path,
   }));
+  const browser = options.discovery
+    ? new VaultBrowser(options.discovery, options.provider)
+    : undefined;
   const providers = new Map<
     string,
     { fingerprint: string; pending: Promise<Provider> }
@@ -182,18 +188,81 @@ export async function startServer(options: {
         }
         if (url.pathname === "/api/projects" && request.method === "GET") {
           json(response, 200, {
-            projects: await Promise.all(
-              projects.map(async (project) => {
-                const schema = await loadSchema(project.path);
-                return {
-                  id: project.id,
-                  name: schema.config.name ?? "Environment project",
-                  schemaPath: project.path,
-                };
-              }),
-            ),
+            mode: browser ? "vault" : "schema",
+            projects: browser
+              ? await browser.projects()
+              : await Promise.all(
+                  projects.map(async (project) => {
+                    const schema = await loadSchema(project.path);
+                    return {
+                      id: project.id,
+                      name: schema.config.name ?? "Environment project",
+                      schemaPath: project.path,
+                    };
+                  }),
+                ),
             mutationToken,
           });
+          return;
+        }
+        if (browser) {
+          const id = url.searchParams.get("project") ?? "";
+          try {
+            if (url.pathname === "/api/matrix" && request.method === "GET")
+              json(
+                response,
+                200,
+                await browser.matrix(
+                  id,
+                  false,
+                  undefined,
+                  url.searchParams.get("fresh") === "1",
+                ),
+              );
+            else if (
+              url.pathname === "/api/reveal-all" &&
+              request.method === "POST"
+            ) {
+              const data = (await body(request)) as { fingerprint?: string };
+              json(
+                response,
+                200,
+                await browser.matrix(
+                  id,
+                  true,
+                  data?.fingerprint,
+                  url.searchParams.get("fresh") === "1",
+                ),
+              );
+            } else if (
+              url.pathname === "/api/reveal" &&
+              request.method === "POST"
+            )
+              json(
+                response,
+                200,
+                await browser.reveal(id, await body(request)),
+              );
+            else if (url.pathname === "/api/edit" && request.method === "POST")
+              json(response, 200, await browser.edit(id, await body(request)));
+            else if (
+              url.pathname === "/api/delete-many" &&
+              request.method === "POST"
+            )
+              json(
+                response,
+                200,
+                await browser.deleteMany(id, await body(request)),
+              );
+            else throw new VaultError("Unknown API endpoint.", "request", 404);
+          } catch (error) {
+            if (
+              error instanceof VaultError &&
+              ["authentication", "provider", "partial"].includes(error.code)
+            )
+              browser.reset();
+            throw error;
+          }
           return;
         }
         const project = projects.find(
@@ -443,6 +512,7 @@ export async function startServer(options: {
     close: () =>
       new Promise<void>((resolve, reject) => {
         snapshots.clear();
+        browser?.reset();
         providers.clear();
         server.close((error) => (error ? reject(error) : resolve()));
         server.closeIdleConnections();

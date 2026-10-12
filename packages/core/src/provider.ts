@@ -26,6 +26,7 @@ export interface VaultItem {
 export interface VaultInfo {
   id: string;
   name: string;
+  account?: string;
 }
 
 export interface Provider {
@@ -86,12 +87,13 @@ export class OnePasswordProvider implements Provider {
   constructor(
     public client: Client,
     private config: ProjectConfig,
+    private discovery = false,
   ) {
     this.allowed = new Set(
       Object.values(config.environments).map((e) => e.vault),
     );
   }
-  static async connect(config: ProjectConfig) {
+  static async connect(config: ProjectConfig, discovery = false) {
     try {
       const token =
         config.auth === "service-account"
@@ -108,9 +110,10 @@ export class OnePasswordProvider implements Provider {
         integrationName: "Better Env Vault",
         integrationVersion: "0.1.0",
       });
-      const provider = new OnePasswordProvider(client, config);
+      const provider = new OnePasswordProvider(client, config, discovery);
       // Listing through this authenticated client checks every configured ID against its account/scope.
       const vaults = await client.vaults.list();
+      if (discovery) provider.allowed = new Set(vaults.map((v) => v.id));
       for (const id of provider.allowed)
         if (!vaults.some((v) => v.id === id))
           throw new VaultError(
@@ -129,6 +132,7 @@ export class OnePasswordProvider implements Provider {
   }
   async listVaults(): Promise<VaultInfo[]> {
     const vaults = await this.call(() => this.client.vaults.list());
+    if (this.discovery) this.allowed = new Set(vaults.map((v) => v.id));
     return vaults
       .filter((vault) => this.allowed.has(vault.id))
       .map((vault) => ({ id: vault.id, name: vault.title }));

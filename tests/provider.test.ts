@@ -135,3 +135,21 @@ describe("SDK adapter contract", () => {
     });
   });
 });
+
+it("limits discovery operations to vaults returned by the authenticated client", async () => {
+  const { client } = fixture();
+  const list = vi.fn(async () => [{ id: vault, title: "Available vault" }]);
+  const provider = new OnePasswordProvider(
+    { ...client, vaults: { list } } as unknown as Client,
+    { ...config, environments: {} },
+    true,
+  );
+  await expect(provider.readVault(vault)).rejects.toThrow("outside");
+  expect(await provider.listVaults()).toEqual([
+    { id: vault, name: "Available vault" },
+  ]);
+  await expect(provider.readVault(vault)).resolves.toHaveLength(1);
+  list.mockResolvedValueOnce([]);
+  await provider.listVaults();
+  await expect(provider.readVault(vault)).rejects.toThrow("outside");
+});

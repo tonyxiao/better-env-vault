@@ -44,7 +44,10 @@ import {
 interface Project {
   id: string;
   name: string;
-  schemaPath: string;
+  schemaPath?: string;
+  mode?: "schema" | "vault";
+  vaultId?: string;
+  account?: string;
 }
 function maskedMatrix(matrix: Matrix): Matrix {
   const { editableValues: _editableValues, ...metadata } = matrix;
@@ -79,6 +82,7 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 
 function App() {
   const [projects, setProjects] = useState<Project[]>([]);
+  const [vaultMode, setVaultMode] = useState(false);
   const [project, setProject] = useState("");
   const [matrix, setMatrix] = useState<Matrix>();
   const [busy, setBusy] = useState(false);
@@ -156,9 +160,11 @@ function App() {
         const response = await request<{
           projects: Project[];
           mutationToken: string;
+          mode?: "schema" | "vault";
         }>("/api/projects");
         if (cancelled) return;
         token.current = response.mutationToken;
+        setVaultMode(response.mode === "vault");
         setProjects(response.projects);
         setProject(response.projects[0]?.id ?? "");
       } catch (error) {
@@ -246,6 +252,7 @@ function App() {
     setCell(undefined);
     setModal(undefined);
     setSelectedRows(new Set());
+    setFilter("all");
     setGridResetEpoch((epoch) => epoch + 1);
     setRevealedMatrix(undefined);
     setAllVisible(false);
@@ -292,7 +299,9 @@ function App() {
         await refresh(false, true);
         if (projectRef.current === targetProject)
           setNotice(
-            "Saved. Values are available on the next environment load.",
+            vaultMode
+              ? "Saved to this 1Password vault."
+              : "Saved. Values are available on the next environment load.",
           );
       }
       setOperations((previous) => {
@@ -363,7 +372,7 @@ function App() {
         await refresh(false, true);
         if (projectRef.current === target)
           setNotice(
-            `Deleted ${payload.names.length} variable${payload.names.length === 1 ? "" : "s"} from the schema and configured vaults.`,
+            `Deleted ${payload.names.length} variable${payload.names.length === 1 ? "" : "s"} ${vaultMode ? "from this vault" : "from the schema and configured vaults"}.`,
           );
       }
     } catch (error) {
@@ -536,19 +545,51 @@ function App() {
       <main>
         <div className="heading">
           <div>
-            <p className="eyebrow">ENVIRONMENT WORKSPACE</p>
-            <h1>Your configuration, clearly.</h1>
+            <p className="eyebrow">
+              {vaultMode ? "1PASSWORD VAULTS" : "ENVIRONMENT WORKSPACE"}
+            </p>
+            <h1>
+              {vaultMode
+                ? "Your vaults, clearly."
+                : "Your configuration, clearly."}
+            </h1>
             <p className="subheading">
-              See every override. Know where each value comes from.
+              {vaultMode
+                ? "Browse and edit secrets in each independent vault."
+                : "See every override. Know where each value comes from."}
             </p>
           </div>
           <Button
             variant="outline"
-            disabled={busy || !matrix}
+            disabled={busy}
             onClick={() => {
               setCell(undefined);
               setGridResetEpoch((epoch) => epoch + 1);
-              void refresh(true);
+              if (!vaultMode && matrix) void refresh(true);
+              else
+                void (async () => {
+                  setBusy(true);
+                  setError("");
+                  try {
+                    const response = await request<{
+                      projects: Project[];
+                      mutationToken: string;
+                      mode?: string;
+                    }>("/api/projects");
+                    token.current = response.mutationToken;
+                    setVaultMode(response.mode === "vault");
+                    setProjects(response.projects);
+                    if (response.projects.some((p) => p.id === project))
+                      await refresh(true);
+                    else setProject(response.projects[0]?.id ?? "");
+                  } catch (error) {
+                    if (error instanceof ApiError && error.code === "session")
+                      disconnect();
+                    else setError((error as Error).message);
+                  } finally {
+                    setBusy(false);
+                  }
+                })();
             }}
           >
             <RefreshCw aria-hidden="true" /> Refresh
@@ -563,10 +604,12 @@ function App() {
           <div className="schema-identity">
             {projects.length > 1 ? (
               <>
-                <label htmlFor="project">Schema</label>
+                <label htmlFor="project">
+                  {vaultMode ? "Vault" : "Schema"}
+                </label>
                 <NativeSelect
                   id="project"
-                  aria-label="Schema"
+                  aria-label={vaultMode ? "Vault" : "Schema"}
                   disabled={busy}
                   value={project}
                   onChange={(event) => {
@@ -578,37 +621,56 @@ function App() {
                   {projects.map((schema) => (
                     <NativeSelectOption value={schema.id} key={schema.id}>
                       {schema.name}
+                      {vaultMode && schema.account
+                        ? ` (${schema.account})`
+                        : ""}
                     </NativeSelectOption>
                   ))}
                 </NativeSelect>
               </>
             ) : (
               <>
-                <span>Schema</span>
+                <span>{vaultMode ? "Vault" : "Schema"}</span>
                 <strong>
                   {matrix?.config.name ??
                     projects.find((schema) => schema.id === project)?.name ??
-                    ".env.schema"}
+                    (vaultMode ? "No accessible vaults" : ".env.schema")}
                 </strong>
               </>
             )}
           </div>
           <div className="schema-path">
-            <span>Schema file</span>
+            <span>{vaultMode ? "Vault ID" : "Schema file"}</span>
             <code>
-              {matrix?.schemaPath ??
-                projects.find((p) => p.id === project)?.schemaPath ??
-                ".env.schema"}
+              {vaultMode
+                ? (projects.find((p) => p.id === project)?.vaultId ?? "—")
+                : (matrix?.schemaPath ??
+                  projects.find((p) => p.id === project)?.schemaPath ??
+                  ".env.schema")}
             </code>
           </div>
-          <Button
-            variant="outline"
-            disabled={!matrix || busy}
-            onClick={() => setModal("settings")}
-          >
-            Schema settings
-          </Button>
+          {!vaultMode ? (
+            <Button
+              variant="outline"
+              disabled={!matrix || busy}
+              onClick={() => setModal("settings")}
+            >
+              Schema settings
+            </Button>
+          ) : null}
         </section>
+        {vaultMode && !projects.length && !error ? (
+          <p role="status">
+            No accessible vaults. Check your 1Password account or
+            service-account permissions, then refresh.
+          </p>
+        ) : null}
+        {vaultMode && matrix && rows.length === 0 ? (
+          <p role="status">
+            This vault has no API Credential variables yet. Add a variable to
+            get started.
+          </p>
+        ) : null}
         <div className="toolbar">
           <div className="search">
             <label className="sr-only" htmlFor="search">
@@ -616,7 +678,11 @@ function App() {
             </label>
             <Input
               id="search"
-              placeholder="Search variables or descriptions…"
+              placeholder={
+                vaultMode
+                  ? "Search variables…"
+                  : "Search variables or descriptions…"
+              }
               value={search}
               onChange={(e) => {
                 setSearch(e.target.value);
@@ -624,28 +690,32 @@ function App() {
               }}
             />
           </div>
-          <label className="filter">
-            Show{" "}
-            <NativeSelect
-              aria-label="Filter variables"
-              value={filter}
-              onChange={(e) => {
-                setFilter(e.target.value);
-                setGridResetEpoch((epoch) => epoch + 1);
-              }}
-            >
-              <NativeSelectOption value="all">All variables</NativeSelectOption>
-              <NativeSelectOption value="missing">
-                Missing values
-              </NativeSelectOption>
-              <NativeSelectOption value="invalid">
-                Invalid values
-              </NativeSelectOption>
-              <NativeSelectOption value="overrides">
-                Overrides
-              </NativeSelectOption>
-            </NativeSelect>
-          </label>
+          {!vaultMode ? (
+            <label className="filter">
+              Show{" "}
+              <NativeSelect
+                aria-label="Filter variables"
+                value={filter}
+                onChange={(e) => {
+                  setFilter(e.target.value);
+                  setGridResetEpoch((epoch) => epoch + 1);
+                }}
+              >
+                <NativeSelectOption value="all">
+                  All variables
+                </NativeSelectOption>
+                <NativeSelectOption value="missing">
+                  Missing values
+                </NativeSelectOption>
+                <NativeSelectOption value="invalid">
+                  Invalid values
+                </NativeSelectOption>
+                <NativeSelectOption value="overrides">
+                  Overrides
+                </NativeSelectOption>
+              </NativeSelect>
+            </label>
+          ) : null}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -777,7 +847,9 @@ function App() {
                     title={
                       selectedRows.size > 200
                         ? "Select up to 200 variables per batch"
-                        : "Delete selected definitions and their items from every configured vault"
+                        : vaultMode
+                          ? "Delete selected secrets from this vault"
+                          : "Delete selected definitions and their items from every configured vault"
                     }
                     onClick={() => setModal("delete")}
                   >
@@ -789,12 +861,14 @@ function App() {
                 <>
                   <span>
                     <i className="legend-dot" />
-                    Explicit override
+                    {vaultMode ? "Stored in vault" : "Explicit override"}
                   </span>
-                  <span>
-                    <i className="legend-dot inherited" />
-                    Inherited value
-                  </span>
+                  {!vaultMode ? (
+                    <span>
+                      <i className="legend-dot inherited" />
+                      Inherited value
+                    </span>
+                  ) : null}
                   <span>
                     {allVisible
                       ? "All matrix values are visible."
@@ -841,8 +915,9 @@ function App() {
           Enter saves down · Tab saves across · Escape cancels · Alt+Enter adds
           a newline.
           <br />
-          Saves update the matrix automatically. Reload direnv or restart your
-          application to use new values.
+          {vaultMode
+            ? "Saves update only the selected 1Password vault."
+            : "Saves update the matrix automatically. Reload direnv or restart your application to use new values."}
         </p>
       </main>
       {cell && matrix ? (
@@ -918,8 +993,9 @@ function DeleteVariablesDialog({
       onClose={onClose}
     >
       <p className="dialog-intro">
-        This removes the selected definitions from .env.schema and their items
-        from every configured 1Password vault, including overrides.
+        {matrix.mode === "vault"
+          ? `This removes the selected secrets from ${matrix.config.name}. Other vaults are unaffected.`
+          : "This removes the selected definitions from .env.schema and their items from every configured 1Password vault, including overrides."}
       </p>
       <ul className="delete-variable-list">
         {batch.names.map((name) => (
@@ -1042,6 +1118,7 @@ function Editor({
   onSource: (env: string) => void;
 }) {
   const v = cell.variable;
+  const vaultMode = matrix.mode === "vault";
   const [action, setAction] = useState(
     cell.environment === "schema" ? "default" : "set",
   );
@@ -1123,15 +1200,21 @@ function Editor({
         <span className="eyebrow">
           {cell.environment === "schema"
             ? "BASE DEFAULT"
-            : cell.environment.toUpperCase()}
+            : vaultMode
+              ? matrix.config.name
+              : cell.environment.toUpperCase()}
         </span>
         <h3>
-          {cell.environment === "schema" ? "Schema default" : originLabel(v)}
+          {vaultMode
+            ? "Stored in vault"
+            : cell.environment === "schema"
+              ? "Schema default"
+              : originLabel(v)}
         </h3>
-        <p>{v.description || "No description yet."}</p>
+        {!vaultMode ? <p>{v.description || "No description yet."}</p> : null}
         <p className="chain">
           {[
-            "schema",
+            ...(vaultMode ? [] : ["schema"]),
             ...(matrix.resolutions.find(
               (r) => r.environment === cell.environment,
             )?.chain ?? []),
@@ -1193,24 +1276,28 @@ function Editor({
           >
             {cell.environment !== "schema" ? (
               <NativeSelectOption value="set">
-                {v.state === "explicit"
-                  ? "Replace override"
-                  : "Create override here"}
+                {vaultMode
+                  ? "Edit value and notes"
+                  : v.state === "explicit"
+                    ? "Replace override"
+                    : "Create override here"}
               </NativeSelectOption>
             ) : null}
-            {!v.sensitive ? (
+            {!vaultMode && !v.sensitive ? (
               <NativeSelectOption value="default">
                 Edit schema default
               </NativeSelectOption>
             ) : null}
-            <NativeSelectOption value="definition">
-              Edit definition
-            </NativeSelectOption>
+            {!vaultMode ? (
+              <NativeSelectOption value="definition">
+                Edit definition
+              </NativeSelectOption>
+            ) : null}
             <NativeSelectOption value="rename">
-              Rename everywhere
+              {vaultMode ? "Rename in this vault" : "Rename everywhere"}
             </NativeSelectOption>
             <NativeSelectOption value="delete">
-              Delete everywhere
+              {vaultMode ? "Delete from this vault" : "Delete everywhere"}
             </NativeSelectOption>
           </NativeSelect>
         </label>
@@ -1218,7 +1305,7 @@ function Editor({
           <>
             <label>
               {action === "set"
-                ? `New value in ${cell.environment}`
+                ? `New value in ${vaultMode ? matrix.config.name : cell.environment}`
                 : "Default shared by every environment"}
               <Textarea
                 aria-label="New value"
@@ -1261,7 +1348,7 @@ function Editor({
             ) : null}
             {action === "set" ? (
               <label>
-                Notes for this override
+                {vaultMode ? "Notes" : "Notes for this override"}
                 <Textarea
                   rows={3}
                   placeholder={
@@ -1319,8 +1406,9 @@ function Editor({
         ) : (
           <>
             <p className="danger-note">
-              This deletes the definition and its items from every configured
-              environment.
+              {vaultMode
+                ? "This deletes this secret from the selected vault."
+                : "This deletes the definition and its items from every configured environment."}
             </p>
             <label>
               Type {v.name} to confirm
@@ -1356,12 +1444,14 @@ function Editor({
             {busy
               ? "Saving…"
               : action === "delete"
-                ? "Delete everywhere"
+                ? vaultMode
+                  ? "Delete from this vault"
+                  : "Delete everywhere"
                 : "Save change"}
           </Button>
         </div>
       </form>
-      {v.state === "explicit" && cell.environment !== "schema" ? (
+      {!vaultMode && v.state === "explicit" && cell.environment !== "schema" ? (
         <div className="remove-override">
           <h3>Restore inheritance</h3>
           <p>
@@ -1404,6 +1494,7 @@ function ProjectDialog({
   onClose: () => void;
   onSave: (payload: Record<string, unknown>) => Promise<unknown>;
 }) {
+  const vaultMode = matrix.mode === "vault";
   const [name, setName] = useState(initialName);
   const [description, setDescription] = useState("");
   const [type, setType] = useState("string");
@@ -1431,10 +1522,7 @@ function ProjectDialog({
       void onSave({
         action: "add",
         name,
-        description,
-        type,
-        required,
-        sensitive,
+        ...(!vaultMode ? { description, type, required, sensitive } : {}),
         ...(createWithValue
           ? {
               initialValues: {
@@ -1468,7 +1556,9 @@ function ProjectDialog({
           ? "These settings live in the header of your .env.schema. Vaults are identified by their IDs."
           : initialName
             ? "Adopt the existing vault item without copying its value into the schema."
-            : "Create a secret in an environment. Child environments inherit its value until you add an override."}
+            : vaultMode
+              ? "Create a secret in the selected 1Password vault."
+              : "Create a secret in an environment. Child environments inherit its value until you add an override."}
       </p>
       {error ? (
         <div role="alert" className="alert error">
@@ -1498,52 +1588,61 @@ function ProjectDialog({
                 onChange={(e) => setName(e.target.value)}
               />
             </label>
-            <label>
-              Description
-              <Textarea
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-              />
-            </label>
-            <label>
-              Type
-              <Input value={type} onChange={(e) => setType(e.target.value)} />
-            </label>
-            <label className="checkbox">
-              <Checkbox
-                checked={required}
-                onCheckedChange={(checked) => setRequired(checked === true)}
-              />
-              Required
-            </label>
-            <label className="checkbox">
-              <Checkbox
-                checked={sensitive}
-                onCheckedChange={(checked) => setSensitive(checked === true)}
-              />
-              Sensitive
-            </label>
-            <label className="checkbox">
-              <Checkbox
-                checked={createWithValue}
-                onCheckedChange={(checked) =>
-                  setCreateWithValue(checked === true)
-                }
-              />
-              Set an initial environment value
-            </label>
+            {!vaultMode ? (
+              <>
+                <label>
+                  Description
+                  <Textarea
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                  />
+                </label>
+                <label>
+                  Type
+                  <Input
+                    value={type}
+                    onChange={(e) => setType(e.target.value)}
+                  />
+                </label>
+                <label className="checkbox">
+                  <Checkbox
+                    checked={required}
+                    onCheckedChange={(checked) => setRequired(checked === true)}
+                  />
+                  Required
+                </label>
+                <label className="checkbox">
+                  <Checkbox
+                    checked={sensitive}
+                    onCheckedChange={(checked) =>
+                      setSensitive(checked === true)
+                    }
+                  />
+                  Sensitive
+                </label>
+                <label className="checkbox">
+                  <Checkbox
+                    checked={createWithValue}
+                    onCheckedChange={(checked) =>
+                      setCreateWithValue(checked === true)
+                    }
+                  />
+                  Set an initial environment value
+                </label>
+              </>
+            ) : null}
             {createWithValue ? (
               <fieldset className="initial-value">
                 <legend>Initial value</legend>
                 <label>
-                  Environment
+                  {vaultMode ? "Vault" : "Environment"}
                   <NativeSelect
                     value={environment}
                     onChange={(e) => setEnvironment(e.target.value)}
                   >
                     {matrix.environments.map((env) => (
                       <NativeSelectOption key={env} value={env}>
-                        {env}
+                        {vaultMode ? matrix.config.name : env}
                       </NativeSelectOption>
                     ))}
                   </NativeSelect>

@@ -25,7 +25,8 @@
     "test:ui": "tsx scripts/test-ui.ts",
     "test:matrix": "tsx scripts/test-matrix.ts",
     "test:grid": "tsx scripts/test-grid.ts",
-    "test:bulk-ui": "tsx scripts/test-bulk-ui.ts"
+    "test:bulk-ui": "tsx scripts/test-bulk-ui.ts",
+    "test:vaults": "tsx scripts/test-vaults.ts"
   },
   "engines": {
     "node": ">=22"
@@ -67,6 +68,7 @@
     "dist/packages",
     "dist/apps/web/src/server.js",
     "dist/apps/web/src/snapshot-cache.js",
+    "dist/apps/web/src/vault-browser.js",
     "apps/web/dist",
     "README.md",
     "docs/setup.md"

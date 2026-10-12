@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface, type Interface } from "node:readline";
 import { startServer } from "../../../apps/web/src/server.js";
 import { VaultError } from "../../core/src/errors.js";
+import type { DiscoveryOptions } from "../../core/src/discovery.js";
 
 export function webOptions(command: Command) {
   return command
@@ -23,11 +24,16 @@ export async function serve(options: {
   port: string;
   open: boolean;
   printLaunchUrl?: boolean;
+  discovery?: DiscoveryOptions;
 }) {
   const port = Number(options.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535)
     throw new VaultError("Invalid port.");
-  const app = await startServer({ schemas: options.schemas, port });
+  const app = await startServer({
+    schemas: options.schemas,
+    port,
+    discovery: options.discovery,
+  });
   let input: Interface | undefined;
   let stopping = false;
   const browsers = new Set<ChildProcess>();

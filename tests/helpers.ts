@@ -82,6 +82,9 @@ export class MemoryProvider implements Provider {
       conflict();
     this.vaults[vault] = this.vaults[vault].filter((i) => i.id !== previous.id);
   }
+  async restore(vault: string, previous: VaultItem) {
+    return this.save(vault, previous.name, previous.value, previous.notes);
+  }
   async rename(vault: string, previous: VaultItem, name: string) {
     if (++this.calls === this.failAt) throw new Error("injected");
     const item = this.vaults[vault].find((i) => i.id === previous.id);

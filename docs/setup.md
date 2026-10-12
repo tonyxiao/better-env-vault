@@ -13,8 +13,54 @@ npm run build
 npm link
 ```
 
+This is the default local installation workflow. Linking exposes `envault` and
+`better-env-vault` through symlinks to this checkout. After source changes, run
+`npm run build` to update the installed commands; linking is normally needed
+only once per checkout and active Node installation. Keep the checkout in a
+stable location and ensure `$(npm prefix -g)/bin` is on your `PATH`. On another
+computer, clone the repository and repeat these setup commands.
+
 Run `better-env-vault --help` for the available commands. For development, use
 `npm run dev -- <command>` without linking.
+
+## Browse vaults without a schema
+
+```bash
+envault                               # browses vaults when .env.schema is absent
+envault --vaults                      # always browse vaults
+envault --vaults --account <account-uuid>
+envault --vaults --service-account-keychain <entry-name>
+```
+
+Desktop discovery uses `op account list --format json` to find accounts, then
+connects through the SDK to list each account's accessible vaults. `--account`
+or `OP_ACCOUNT` selects one account and does not require the `op` CLI.
+`OP_SERVICE_ACCOUNT_TOKEN` or `--service-account-keychain` instead selects
+service-account authentication and lists only the token's accessible vaults.
+Use `envault auth store <entry-name>` to store a token through stdin as described
+below.
+
+Choose a **Vault** to view its variables. Each vault is an isolated environment;
+matching names in other vaults are independent. Discovery reads vault metadata
+first and loads values only for the selected vault. **Refresh** rescans the
+available vaults and reloads the selected vault.
+
+The grid supports name search, keyboard navigation, inline editing, reveal/hide,
+notes, adding variables, and confirmed single or bulk deletion. Rename and delete
+affect only the selected vault. All values are treated as sensitive. No schema
+file is written, and there are no defaults, inheritance, type decorators, or
+schema settings. Bulk deletion checks versions before removing any items and
+attempts restoration on failure.
+
+As in schema mode, variables are API Credential items with an environment-variable
+name and a single `credential` field. Login and other item categories are not
+environment variables and are excluded. A vault with invalid or duplicate API
+Credential names reports an error for that vault; other vaults remain selectable.
+Notes and values are returned only by the protected reveal flow.
+
+An explicit schema path must exist and be valid; a missing or invalid supplied
+schema never falls back to vault discovery. Export, check, explain, and run still
+use `.env.schema` for validation and environment resolution.
 
 ## One schema per project
 
@@ -379,6 +425,10 @@ creation, masking/reveal, notes-only updates, replacement values, empty
 overrides, inheritance, and confirmed deletion, and removes the fixture.
 Existing item versions are checked to remain unchanged. Chrome must be installed.
 If interrupted, `.local/ui-test-recovery.json` identifies only that test fixture.
+
+`npm run test:vaults` verifies discovery, vault isolation, search, inline editing,
+masking, empty vaults, creation, renaming, and deletion using a memory provider.
+It requires local Chrome and never accesses 1Password.
 
 `npm run test:matrix` checks global reveal/hide, cached inline editing, create/delete,
 explicit empty values, drawer focus, mobile layout, CSP, and inheritance

@@ -224,7 +224,12 @@ export function MatrixGrid(props: Props) {
     );
   }
   function navigate(rowIdx: number, idx: number, direction: EditDirection) {
-    const keys = ["select", "variable", "schema", ...matrix.environments];
+    const keys = [
+      "select",
+      "variable",
+      ...(matrix.mode === "vault" ? [] : ["schema"]),
+      ...matrix.environments,
+    ];
     let nextRow = rowIdx,
       nextIdx = idx;
     for (let step = 0; step < rows.length * keys.length; step++) {
@@ -316,7 +321,9 @@ export function MatrixGrid(props: Props) {
               ? active.error
               : environment === "schema"
                 ? "Schema default"
-                : `${!variable.valid ? "Invalid · " : ""}${originLabel(variable)}`}
+                : matrix.mode === "vault"
+                  ? "Stored in vault"
+                  : `${!variable.valid ? "Invalid · " : ""}${originLabel(variable)}`}
           </span>
         </Button>
         {saving ? (
@@ -398,16 +405,23 @@ export function MatrixGrid(props: Props) {
               Deleting…
             </span>
           ) : null}
-          <p>{row.definition.description || "No description"}</p>
+          {matrix.mode !== "vault" ? (
+            <p>{row.definition.description || "No description"}</p>
+          ) : null}
           <div className="badges">
-            <span>{row.definition.type}</span>
+            {matrix.mode !== "vault" ? (
+              <span>{row.definition.type}</span>
+            ) : null}
             {row.definition.required ? <span>required</span> : null}
             <span>{row.definition.sensitive ? "sensitive" : "public"}</span>
           </div>
         </div>
       ),
     },
-    ...["schema", ...matrix.environments].map((environment) => ({
+    ...[
+      ...(matrix.mode === "vault" ? [] : ["schema"]),
+      ...matrix.environments,
+    ].map((environment) => ({
       key: environment,
       name: environment === "schema" ? "Schema default" : environment,
       minWidth: 220,
@@ -427,9 +441,11 @@ export function MatrixGrid(props: Props) {
         const description =
           environment === "schema"
             ? "Base layer"
-            : matrix.config.environments[environment].extends
-              ? `Inherits ${matrix.config.environments[environment].extends}`
-              : "Inherits schema default";
+            : matrix.mode === "vault"
+              ? "Independent environment"
+              : matrix.config.environments[environment].extends
+                ? `Inherits ${matrix.config.environments[environment].extends}`
+                : "Inherits schema default";
         return (
           <div>
             <span className="column-label">{description}</span>
@@ -441,7 +457,11 @@ export function MatrixGrid(props: Props) {
                     : `${vault?.name ?? "Vault name unavailable"} (${id})`
                 }
               >
-                {environment === "schema" ? "Schema default" : environment}
+                {environment === "schema"
+                  ? "Schema default"
+                  : matrix.mode === "vault"
+                    ? (vault?.name ?? "Vault")
+                    : environment}
               </strong>
               {environment !== "schema" ? (
                 <Tooltip disableHoverableContent>
