@@ -19,6 +19,10 @@ const browser = await chromium.launch({ channel: "chrome", headless: true });
 try {
   const page = await browser.newPage();
   const errors: string[] = [];
+  let cellReads = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/reveal") cellReads++;
+  });
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(app.launchUrl);
   const infraCell = page.getByRole("button", {
@@ -78,6 +82,15 @@ try {
           'textarea[aria-label="TOKEN value in infra"]',
         ) as HTMLTextAreaElement
       )?.value === "infra-fixture",
+  );
+  await field.press("Escape");
+  const readsBefore = cellReads;
+  await infraCell.click();
+  assert.equal(await field.inputValue(), "infra-fixture");
+  assert.equal(
+    cellReads,
+    readsBefore,
+    "Reopening a cell must not issue another reveal request",
   );
   await field.fill("infra-edited");
   await field.press("Enter");

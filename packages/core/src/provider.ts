@@ -32,6 +32,7 @@ export interface VaultInfo {
 export interface Provider {
   listVaults?(): Promise<VaultInfo[]>;
   readVault(vaultId: string): Promise<VaultItem[]>;
+  readItem?(vaultId: string, itemId: string): Promise<VaultItem>;
   save(
     vaultId: string,
     name: string,
@@ -209,6 +210,23 @@ export class OnePasswordProvider implements Provider {
         }
       }
       return normalizeItems(items, this.config);
+    });
+  }
+  async readItem(vaultId: string, itemId: string): Promise<VaultItem> {
+    this.check(vaultId);
+    return this.call(async () => {
+      const item = await this.client.items.get(vaultId, itemId);
+      if (
+        item.vaultId !== vaultId ||
+        item.id !== itemId ||
+        item.category !== ItemCategory.ApiCredentials
+      )
+        throw new VaultError(
+          "1Password returned an unexpected credential item.",
+          "provider",
+          502,
+        );
+      return normalizeItems([item], this.config)[0];
     });
   }
   private async fresh(vaultId: string, previous: VaultItem): Promise<Item> {

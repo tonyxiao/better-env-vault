@@ -27,6 +27,7 @@ export function SpreadsheetEditor({
   variable,
   environment,
   origin,
+  compact = false,
   hideEpoch,
   initialValue,
   draftValue,
@@ -40,6 +41,7 @@ export function SpreadsheetEditor({
   variable: ResolvedVariable;
   environment: string;
   origin?: string;
+  compact?: boolean;
   hideEpoch: number;
   initialValue?: { value?: string };
   draftValue?: string;
@@ -258,14 +260,14 @@ export function SpreadsheetEditor({
         >
           {error}
         </span>
-      ) : (
+      ) : !compact ? (
         <span className="spreadsheet-caption origin">
           {origin ??
             (environment === "schema"
               ? "Schema default"
               : originLabel(variable))}
         </span>
-      )}
+      ) : null}
     </form>
   );
 }

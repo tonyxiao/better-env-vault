@@ -528,7 +528,7 @@ function App() {
       <VaultWorkspace mutationToken={token.current} onDisconnect={disconnect} />
     );
   return (
-    <div className="app">
+    <div className="app schema-app">
       <header>
         <a className="brand" href="/" aria-label="Better Env Vault home">
           <span className="mark">E</span>Better Env Vault
@@ -536,58 +536,6 @@ function App() {
         <span className="local">● Local workspace</span>
       </header>
       <main>
-        <div className="heading">
-          <div>
-            <p className="eyebrow">
-              {vaultMode ? "1PASSWORD VAULTS" : "ENVIRONMENT WORKSPACE"}
-            </p>
-            <h1>
-              {vaultMode
-                ? "Your vaults, clearly."
-                : "Your configuration, clearly."}
-            </h1>
-            <p className="subheading">
-              {vaultMode
-                ? "Browse and edit secrets in each independent vault."
-                : "See every override. Know where each value comes from."}
-            </p>
-          </div>
-          <Button
-            variant="outline"
-            disabled={busy}
-            onClick={() => {
-              setCell(undefined);
-              setGridResetEpoch((epoch) => epoch + 1);
-              if (!vaultMode && matrix) void refresh(true);
-              else
-                void (async () => {
-                  setBusy(true);
-                  setError("");
-                  try {
-                    const response = await request<{
-                      projects: Project[];
-                      mutationToken: string;
-                      mode?: string;
-                    }>("/api/projects");
-                    token.current = response.mutationToken;
-                    setVaultMode(response.mode === "vault");
-                    setProjects(response.projects);
-                    if (response.projects.some((p) => p.id === project))
-                      await refresh(true);
-                    else setProject(response.projects[0]?.id ?? "");
-                  } catch (error) {
-                    if (error instanceof ApiError && error.code === "session")
-                      disconnect();
-                    else setError((error as Error).message);
-                  } finally {
-                    setBusy(false);
-                  }
-                })();
-            }}
-          >
-            <RefreshCw aria-hidden="true" /> Refresh
-          </Button>
-        </div>
         {error ? (
           <div role="alert" className="alert error">
             {error}
@@ -709,6 +657,41 @@ function App() {
               </NativeSelect>
             </label>
           ) : null}
+          <Button
+            variant="outline"
+            disabled={busy}
+            onClick={() => {
+              setCell(undefined);
+              setGridResetEpoch((epoch) => epoch + 1);
+              if (!vaultMode && matrix) void refresh(true);
+              else
+                void (async () => {
+                  setBusy(true);
+                  setError("");
+                  try {
+                    const response = await request<{
+                      projects: Project[];
+                      mutationToken: string;
+                      mode?: string;
+                    }>("/api/projects");
+                    token.current = response.mutationToken;
+                    setVaultMode(response.mode === "vault");
+                    setProjects(response.projects);
+                    if (response.projects.some((p) => p.id === project))
+                      await refresh(true);
+                    else setProject(response.projects[0]?.id ?? "");
+                  } catch (error) {
+                    if (error instanceof ApiError && error.code === "session")
+                      disconnect();
+                    else setError((error as Error).message);
+                  } finally {
+                    setBusy(false);
+                  }
+                })();
+            }}
+          >
+            <RefreshCw aria-hidden="true" /> Refresh
+          </Button>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -904,14 +887,6 @@ function App() {
         <div className="save-status" role="status" aria-live="polite">
           {notice}
         </div>
-        <p className="footnote">
-          Enter saves down · Tab saves across · Escape cancels · Alt+Enter adds
-          a newline.
-          <br />
-          {vaultMode
-            ? "Saves update only the selected 1Password vault."
-            : "Saves update the matrix automatically. Reload direnv or restart your application to use new values."}
-        </p>
       </main>
       {cell && matrix ? (
         <Editor

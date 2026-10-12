@@ -82,6 +82,11 @@ export class VaultBrowser {
   private pending?: Promise<Provider>;
   private vaults = new Map<string, VaultInfo>();
   private snapshots = new SnapshotCache<VaultItem[]>();
+  private inventories = new Map<
+    string,
+    { fingerprint: string; items: Map<string, { id: string; version: number }> }
+  >();
+  private reveals = new SnapshotCache<VaultItem>();
   private queues = new Map<string, Promise<unknown>>();
   constructor(
     private options: DiscoveryOptions,
@@ -99,6 +104,8 @@ export class VaultBrowser {
         throw new VaultError("Vault discovery is unavailable.");
       const vaults = await provider.listVaults();
       this.vaults = new Map(vaults.map((v) => [v.id, v]));
+      for (const id of this.inventories.keys())
+        if (!this.vaults.has(id)) this.inventories.delete(id);
       return vaults
         .sort(
           (a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id),
@@ -136,6 +143,15 @@ export class VaultBrowser {
             );
           names.add(item.name);
         }
+        this.inventories.set(id, {
+          fingerprint: identity(this.vault(id), items),
+          items: new Map(
+            items.map((item) => [
+              item.name,
+              { id: item.id, version: item.version },
+            ]),
+          ),
+        });
         return items;
       },
       fresh,
@@ -252,13 +268,46 @@ export class VaultBrowser {
         environment: z.literal(environment),
         name,
         fingerprint: z.string(),
+        itemId: z.string().min(1).optional(),
+        version: z.number().int().positive().optional(),
       })
+      .refine(
+        (data) => (data.itemId === undefined) === (data.version === undefined),
+      )
       .safeParse(input);
     if (!parsed.success) throw new VaultError("Invalid reveal request.");
-    const items = await this.items(id);
-    if (parsed.data.fingerprint !== identity(this.vault(id), items)) conflict();
-    const item = items.find((i) => i.name === parsed.data.name);
+    this.vault(id);
+    const provider = await this.provider();
+    const cached = this.snapshots.peek(id, id);
+    let item: VaultItem | undefined;
+    if (cached || !provider.readItem || !this.inventories.has(id)) {
+      const items = cached ? await cached : await this.items(id);
+      if (parsed.data.fingerprint !== identity(this.vault(id), items))
+        conflict();
+      item = items.find((i) => i.name === parsed.data.name);
+    } else {
+      const inventory = this.inventories.get(id)!;
+      if (inventory.fingerprint !== parsed.data.fingerprint) conflict();
+      const entry = inventory.items.get(parsed.data.name);
+      if (!entry) throw new VaultError("Unknown vault variable.");
+      item = await this.reveals.get(
+        JSON.stringify([id, entry.id]),
+        String(entry.version),
+        () => provider.readItem!(id, entry.id),
+      );
+      if (
+        item.id !== entry.id ||
+        item.name !== parsed.data.name ||
+        item.version !== entry.version
+      )
+        conflict();
+    }
     if (!item) throw new VaultError("Unknown vault variable.");
+    if (
+      parsed.data.itemId !== undefined &&
+      (item.id !== parsed.data.itemId || item.version !== parsed.data.version)
+    )
+      conflict();
     return {
       value: item.value,
       explicitValue: item.value,
@@ -275,6 +324,8 @@ export class VaultBrowser {
       return await pending;
     } finally {
       this.snapshots.invalidate(id);
+      this.inventories.delete(id);
+      this.reveals.clear();
       if (this.queues.get(id) === pending) this.queues.delete(id);
     }
   }
@@ -377,5 +428,7 @@ export class VaultBrowser {
   reset() {
     this.pending = undefined;
     this.snapshots.clear();
+    this.inventories.clear();
+    this.reveals.clear();
   }
 }

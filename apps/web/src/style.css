@@ -710,3 +710,125 @@ main {
 .vault-grid {
   min-height: 240px;
 }
+
+/* Keep vault browsing focused on the table; schema-mode layout is unchanged. */
+.vault-app > header {
+  height: 46px;
+  padding: 0 18px;
+}
+.vault-app .brand {
+  font-size: 14px;
+  gap: 8px;
+}
+.vault-app .mark {
+  width: 24px;
+  height: 24px;
+  font-size: 16px;
+}
+.vault-app > main {
+  max-width: none;
+  padding: 12px 18px;
+}
+.vault-app .environment-filters {
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.vault-app .environment-filters button {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+.vault-app .toolbar {
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.vault-app .toolbar input,
+.vault-app .toolbar button {
+  height: 32px;
+}
+.vault-app .toolbar button[data-size="icon"] {
+  width: 32px;
+}
+.vault-app .matrix-footer {
+  min-height: 32px;
+  padding: 6px 10px;
+  font-size: 11px;
+}
+.vault-app .save-status {
+  min-height: 0;
+  margin: 6px 0 0;
+}
+.vault-app .save-status:empty {
+  display: none;
+}
+.vault-grid {
+  min-height: 0;
+}
+.vault-grid [role="gridcell"],
+.vault-grid [role="columnheader"] {
+  padding: 3px 10px;
+}
+.vault-grid .value-cell {
+  min-height: 26px;
+  height: 26px;
+  padding: 2px 30px 2px 6px;
+}
+.vault-grid .origin:empty {
+  display: none;
+}
+.vault-grid .vault-environment-cell {
+  gap: 0;
+}
+.vault-grid .vault-environment-cell span {
+  display: none;
+}
+.vault-grid .spreadsheet-input {
+  min-height: 26px;
+  height: 26px;
+  padding: 3px 6px;
+}
+.vault-grid .cell-details {
+  top: 1px;
+}
+@media (max-width: 640px) {
+  .vault-app > main {
+    padding: 10px;
+  }
+  .vault-app > header {
+    padding: 0 10px;
+  }
+}
+.vault-app .matrix-footer {
+  height: 32px;
+}
+.vault-app .save-status {
+  height: auto;
+  padding-top: 0;
+}
+.schema-app > header {
+  height: 46px;
+  padding: 0 18px;
+}
+.schema-app .brand {
+  font-size: 14px;
+  gap: 8px;
+}
+.schema-app .mark {
+  width: 24px;
+  height: 24px;
+  font-size: 16px;
+}
+.schema-app > main {
+  padding: 12px 18px;
+}
+.schema-app .workspace-bar {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  gap: 16px;
+}
+.schema-app .toolbar {
+  margin-bottom: 10px;
+}
+.vault-app .matrix-footer:has(button) {
+  height: auto;
+}

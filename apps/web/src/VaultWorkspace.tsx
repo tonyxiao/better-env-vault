@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   DataGrid,
   SelectColumn,
@@ -32,6 +39,8 @@ import {
   maskCatalog,
   type VaultCatalog,
   type VaultRow,
+  VaultValueCache,
+  type RevealedVaultValue,
 } from "./vault-model.js";
 
 class RequestError extends Error {
@@ -54,6 +63,7 @@ function VaultValueEditor({
   hideEpoch,
   visible,
   operation,
+  cachedValue,
   save,
   reveal,
   register,
@@ -62,6 +72,7 @@ function VaultValueEditor({
   hideEpoch: number;
   visible: boolean;
   operation?: Operation;
+  cachedValue?: RevealedVaultValue;
   save: (row: VaultRow, payload: Record<string, unknown>) => Promise<boolean>;
   reveal: (row: VaultRow) => Promise<{ editableValue?: string }>;
   register: (id: string, commit?: () => void) => void;
@@ -87,9 +98,15 @@ function VaultValueEditor({
     <SpreadsheetEditor
       variable={row.variable}
       environment={row.environment.name}
-      origin={`Stored in ${row.environment.name}`}
+      compact
       hideEpoch={hideEpoch}
-      initialValue={visible ? { value: row.variable.value } : undefined}
+      initialValue={
+        visible
+          ? { value: row.variable.value }
+          : cachedValue
+            ? { value: cachedValue.editableValue }
+            : undefined
+      }
       draftValue={
         operation?.status === "error" &&
         typeof operation.payload.value === "string"
@@ -118,6 +135,7 @@ export function VaultWorkspace({
 }) {
   const [catalog, setCatalog] = useState<VaultCatalog>();
   const catalogRef = useRef<VaultCatalog | undefined>(undefined);
+  const valueCache = useRef(new VaultValueCache());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -145,6 +163,19 @@ export function VaultWorkspace({
   const [deleteRows, setDeleteRows] = useState<VaultRow[]>();
   const [confirmation, setConfirmation] = useState("");
   const grid = useRef<DataGridHandle>(null);
+  const [gridWidth, setGridWidth] = useState(0);
+  const [resizedWidths, setResizedWidths] = useState<Record<string, number>>(
+    {},
+  );
+  const [freezeNames, setFreezeNames] = useState(
+    () => window.matchMedia("(min-width: 640px)").matches,
+  );
+  useEffect(() => {
+    const media = window.matchMedia("(min-width: 640px)");
+    const update = () => setFreezeNames(media.matches);
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
   const activeCommit = useRef<(() => void) | undefined>(undefined);
   const activeRow = useRef<string | undefined>(undefined);
   const register = useCallback((id: string, commit?: () => void) => {
@@ -176,6 +207,7 @@ export function VaultWorkspace({
     [mutationToken, onDisconnect],
   );
   const hide = useCallback(() => {
+    valueCache.current.clear();
     visibleIntent.current = false;
     ++visibility.current;
     setAllVisible(false);
@@ -186,6 +218,7 @@ export function VaultWorkspace({
   }, []);
   const load = useCallback(
     async (fresh = false, quiet = false) => {
+      if (fresh) valueCache.current.clear();
       const id = ++loadId.current;
       const generation = visibility.current;
       if (!quiet) setLoading(true);
@@ -196,6 +229,7 @@ export function VaultWorkspace({
         );
         if (!alive.current || id !== loadId.current) return;
         catalogRef.current = maskCatalog(data);
+        valueCache.current.reconcile(catalogRows(data));
         if (visibleIntent.current && generation === visibility.current) {
           data = await api<VaultCatalog>("/api/catalog/reveal", {
             fingerprints: Object.fromEntries(
@@ -215,13 +249,10 @@ export function VaultWorkspace({
             ? data
             : maskCatalog(data),
         );
+        const available = new Set(catalogRows(data).map((row) => row.id));
         setSelected(
           (previous) =>
-            new Set(
-              [...previous].filter((id) =>
-                catalogRows(data).some((row) => row.id === id),
-              ),
-            ),
+            new Set([...previous].filter((id) => available.has(id))),
         );
       } catch (error) {
         if (alive.current && id === loadId.current) {
@@ -239,6 +270,7 @@ export function VaultWorkspace({
     void load();
     return () => {
       alive.current = false;
+      valueCache.current.clear();
       ++loadId.current;
       ++visibility.current;
     };
@@ -248,16 +280,32 @@ export function VaultWorkspace({
     () => filterVaultRows(rows, search, environments),
     [rows, search, environments],
   );
-  async function reveal(row: VaultRow) {
-    return api<{
-      editableValue: string;
-      value: string;
-      explicitValue: string;
-      notes: string;
-    }>(`/api/reveal?project=${encodeURIComponent(row.vaultId)}`, {
-      name: row.variable.name,
-      environment: "vault",
-      fingerprint: row.matrix.fingerprint,
+  useLayoutEffect(() => {
+    const element = grid.current?.element;
+    if (!element) return;
+    const measure = () => setGridWidth(element.clientWidth);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [!!catalog]);
+  function reveal(row: VaultRow) {
+    return valueCache.current.get(row, async () => {
+      try {
+        return await api<RevealedVaultValue>(
+          `/api/reveal?project=${encodeURIComponent(row.vaultId)}`,
+          {
+            name: row.variable.name,
+            environment: "vault",
+            fingerprint: row.matrix.fingerprint,
+            itemId: row.variable.itemId,
+            version: row.variable.explicit?.version,
+          },
+        );
+      } catch (error) {
+        valueCache.current.clear();
+        throw error;
+      }
     });
   }
   async function save(
@@ -267,6 +315,7 @@ export function VaultWorkspace({
     payload: Record<string, unknown>,
   ) {
     if (pending.current.has(row.id)) return false;
+    valueCache.current.invalidate(row.id);
     pending.current.add(row.id);
     setOperations((previous) => ({
       ...previous,
@@ -397,17 +446,17 @@ export function VaultWorkspace({
     }
   }
   const columns: Column<VaultRow>[] = [
-    { ...SelectColumn, width: 36, minWidth: 36, frozen: true },
+    { ...SelectColumn, width: 36, minWidth: 36, frozen: freezeNames },
     {
       key: "name",
       name: "Secret",
       minWidth: 220,
-      width: 330,
+      width: resizedWidths.name ?? (freezeNames ? 300 : 220),
       resizable: true,
-      frozen: true,
+      frozen: freezeNames,
       renderCell: ({ row }) => (
         <div className="variable-cell">
-          <code>{row.variable.name}</code>
+          <code title={row.variable.name}>{row.variable.name}</code>
         </div>
       ),
     },
@@ -415,11 +464,15 @@ export function VaultWorkspace({
       key: "environment",
       name: "Environment",
       minWidth: 160,
-      width: 240,
+      width: resizedWidths.environment ?? 170,
       resizable: true,
       renderCell: ({ row }) => (
         <div className="vault-environment-cell">
-          <strong title={row.vaultId}>{row.environment.name}</strong>
+          <strong
+            title={`${row.environment.name} · ${row.environment.account ?? ""} · ${row.vaultId}`}
+          >
+            {row.environment.name}
+          </strong>
           {row.environment.account ? (
             <span>{row.environment.account}</span>
           ) : null}
@@ -430,7 +483,13 @@ export function VaultWorkspace({
       key: "value",
       name: "Value",
       minWidth: 260,
-      resizable: true,
+      width: Math.max(
+        260,
+        gridWidth -
+          36 -
+          (resizedWidths.name ?? (freezeNames ? 300 : 220)) -
+          (resizedWidths.environment ?? 170),
+      ),
       cellClass: "environment-value-cell",
       editable: (row) => !deleting && operations[row.id]?.status !== "saving",
       editorOptions: {
@@ -443,6 +502,7 @@ export function VaultWorkspace({
           visible={allVisible}
           hideEpoch={hideEpoch}
           operation={operations[props.row.id]}
+          cachedValue={valueCache.current.peek(props.row)}
           save={save}
           reveal={reveal}
           register={register}
@@ -486,7 +546,7 @@ export function VaultWorkspace({
                 className={`origin ${operation?.status === "error" ? "field-error-message" : ""}`}
                 role={operation?.status === "error" ? "alert" : undefined}
               >
-                {operation?.error ?? `Stored in ${row.environment.name}`}
+                {operation?.error ?? ""}
               </span>
             </Button>
             {operation?.status === "saving" ? (
@@ -525,47 +585,21 @@ export function VaultWorkspace({
   ];
   const addingMatrix = catalog?.matrices.find((m) => m.id === addEnvironment);
   return (
-    <div className="app">
+    <div className="app vault-app">
       <header>
         <a className="brand" href="/" aria-label="Better Env Vault home">
           <span className="mark">E</span>Better Env Vault
         </a>
-        <span className="local">● Local workspace</span>
+        <span
+          className="local"
+          title={`1Password · ${catalog?.auth === "service-account" ? "Service account" : "Desktop authentication"}`}
+        >
+          {catalog?.auth === "service-account"
+            ? "Service account"
+            : "1Password"}
+        </span>
       </header>
       <main>
-        <div className="heading">
-          <div>
-            <p className="eyebrow">1PASSWORD SECRETS</p>
-            <h1>All your environments, together.</h1>
-            <p className="subheading">
-              Search every secret. Filter by environment. Edit values in place.
-            </p>
-          </div>
-          <Button
-            variant="outline"
-            disabled={loading}
-            onClick={() => {
-              activeCommit.current?.();
-              setDetails(undefined);
-              void load(true);
-            }}
-          >
-            <RefreshCw />
-            Refresh
-          </Button>
-        </div>
-        <div className="vault-summary">
-          <span>
-            {rows.length} secrets · {catalog?.environments.length ?? 0}{" "}
-            environments
-          </span>
-          <span>
-            1Password ·{" "}
-            {catalog?.auth === "service-account"
-              ? "Service account"
-              : "Desktop authentication"}
-          </span>
-        </div>
         {error ? (
           <div role="alert" className="alert error">
             {error}
@@ -647,6 +681,20 @@ export function VaultWorkspace({
           <Button
             variant="outline"
             size="icon"
+            aria-label="Refresh secrets"
+            title="Refresh secrets"
+            disabled={loading}
+            onClick={() => {
+              activeCommit.current?.();
+              setDetails(undefined);
+              void load(true);
+            }}
+          >
+            <RefreshCw className={loading ? "animate-spin" : undefined} />
+          </Button>
+          <Button
+            variant="outline"
+            size="icon"
             aria-label={
               allVisible || revealing ? "Hide all values" : "Reveal all values"
             }
@@ -681,13 +729,19 @@ export function VaultWorkspace({
               aria-label="Secrets across environments"
               rows={filtered}
               columns={columns}
+              onColumnResize={(column, width) =>
+                setResizedWidths((previous) => ({
+                  ...previous,
+                  [column.key]: width,
+                }))
+              }
               rowKeyGetter={(row) => row.id}
               selectedRows={selected}
               onSelectedRowsChange={setSelected}
-              rowHeight={64}
-              headerRowHeight={44}
+              rowHeight={36}
+              headerRowHeight={32}
               style={{
-                height: Math.max(240, Math.min(620, 44 + filtered.length * 64)),
+                height: `min(${Math.max(104, 32 + filtered.length * 36)}px, calc(100dvh - 182px))`,
               }}
               onCellKeyDown={(args, event) => {
                 if (args.mode === "EDIT") {
@@ -747,11 +801,7 @@ export function VaultWorkspace({
                   </Button>
                 </>
               ) : (
-                <span>
-                  {allVisible
-                    ? "Values are visible."
-                    : "Values stay masked until revealed."}
-                </span>
+                <span>{allVisible ? "Values visible" : "Values hidden"}</span>
               )}
             </footer>
           </section>
@@ -766,12 +816,6 @@ export function VaultWorkspace({
         <div className="save-status" role="status" aria-live="polite">
           {notice}
         </div>
-        <p className="footnote">
-          Enter saves down · Tab moves to the next secret · Escape cancels ·
-          Alt+Enter adds a newline.
-          <br />
-          Each save changes only that secret’s environment.
-        </p>
       </main>
       {details ? (
         <Editor

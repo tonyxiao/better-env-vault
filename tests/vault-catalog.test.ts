@@ -119,3 +119,82 @@ it("explicit desktop authentication overrides an ambient token; service-account 
     vi.unstubAllEnvs();
   }
 });
+
+it("reveals one credential after vault snapshots expire without rereading the entire vault", async () => {
+  vi.useFakeTimers();
+  try {
+    const { browser, provider } = await fixture();
+    const catalog = await browser.catalog();
+    const row = catalogRows(catalog as VaultCatalog).find(
+      (r) => r.vaultId === dev,
+    )!;
+    const readVault = vi.spyOn(provider, "readVault");
+    const readItem = vi.spyOn(provider, "readItem");
+    await vi.advanceTimersByTimeAsync(30_001);
+    const request = {
+      environment: "vault",
+      name: row.variable.name,
+      fingerprint: row.matrix.fingerprint,
+      itemId: row.variable.itemId,
+      version: row.variable.explicit!.version,
+    };
+    const [first, second] = await Promise.all([
+      browser.reveal(dev, request),
+      browser.reveal(dev, request),
+    ]);
+    expect(first.value).toBe("private-dev");
+    expect(second.value).toBe("private-dev");
+    expect(readVault).not.toHaveBeenCalled();
+    expect(readItem).toHaveBeenCalledTimes(1);
+    expect(readItem).toHaveBeenCalledWith(dev, row.variable.itemId);
+    await vi.advanceTimersByTimeAsync(30_001);
+    provider.vaults[dev][0].version++;
+    await expect(browser.reveal(dev, request)).rejects.toThrow("changed");
+    expect(readVault).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("keeps opened-cell values scoped to item identity/version and rejects late cache repopulation", async () => {
+  const { VaultValueCache } = await import("../apps/web/src/vault-model.js");
+  const { browser } = await fixture();
+  const rows = catalogRows((await browser.catalog()) as VaultCatalog);
+  const row = rows.find((r) => r.vaultId === dev)!;
+  const other = rows.find(
+    (r) => r.vaultId === prod && r.variable.name === "TOKEN",
+  )!;
+  const cache = new VaultValueCache();
+  const value = {
+    value: "private",
+    editableValue: "private",
+    explicitValue: "private",
+    notes: "notes",
+  };
+  const load = vi.fn(async () => value);
+  await cache.get(row, load);
+  await cache.get(row, load);
+  expect(load).toHaveBeenCalledTimes(1);
+  expect(cache.peek(row)).toEqual(value);
+  expect(cache.peek(other)).toBeUndefined();
+  const next = {
+    ...row,
+    variable: {
+      ...row.variable,
+      explicit: {
+        ...row.variable.explicit!,
+        version: row.variable.explicit!.version + 1,
+      },
+    },
+  };
+  expect(cache.peek(next)).toBeUndefined();
+  cache.reconcile([next]);
+  expect(cache.peek(row)).toBeUndefined();
+  let resolve!: (result: typeof value) => void;
+  const pending = cache.get(row, () => new Promise((done) => (resolve = done)));
+  await Promise.resolve();
+  cache.clear();
+  resolve(value);
+  await pending;
+  expect(cache.peek(row)).toBeUndefined();
+});

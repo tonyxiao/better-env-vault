@@ -22,13 +22,8 @@ export class SnapshotCache<T> {
     load: () => Promise<T>,
     fresh = false,
   ): Promise<T> {
-    const current = this.entries.get(key);
-    if (
-      !fresh &&
-      current?.fingerprint === fingerprint &&
-      (current.pending || current.expires > this.now())
-    )
-      return current.value;
+    const current = fresh ? undefined : this.peek(key, fingerprint);
+    if (current) return current;
     this.invalidate(key);
     const entry: {
       fingerprint: string;
@@ -58,6 +53,15 @@ export class SnapshotCache<T> {
       },
     );
     return entry.value;
+  }
+
+  /** Reuse a live snapshot without triggering an expensive full-vault read. */
+  peek(key: string, fingerprint: string): Promise<T> | undefined {
+    const entry = this.entries.get(key);
+    return entry?.fingerprint === fingerprint &&
+      (entry.pending || entry.expires > this.now())
+      ? entry.value
+      : undefined;
   }
 
   invalidate(key: string) {

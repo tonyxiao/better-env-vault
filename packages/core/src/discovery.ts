@@ -91,6 +91,7 @@ export async function connectDiscovery(
       return vaults;
     },
     readVault: async (id) => owner(id).readVault(id),
+    readItem: async (id, itemId) => owner(id).readItem!(id, itemId),
     save: async (id, name, value, notes, previous) =>
       owner(id).save(id, name, value, notes, previous),
     remove: async (id, previous) => owner(id).remove(id, previous),

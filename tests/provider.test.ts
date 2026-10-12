@@ -153,3 +153,17 @@ it("limits discovery operations to vaults returned by the authenticated client",
   await provider.listVaults();
   await expect(provider.readVault(vault)).rejects.toThrow("outside");
 });
+
+it("reads a selected credential through one SDK item request and verifies its scope", async () => {
+  const { provider, client, item } = fixture();
+  const value = await provider.readItem(vault, item.id);
+  expect(value.value).toBe("private-content");
+  expect(client.items.get).toHaveBeenCalledWith(vault, item.id);
+  expect(client.items.list).not.toHaveBeenCalled();
+  expect(client.items.getAll).not.toHaveBeenCalled();
+  await expect(provider.readItem("outside", item.id)).rejects.toThrow(
+    "outside",
+  );
+  item.vaultId = "wrong-vault";
+  await expect(provider.readItem(vault, item.id)).rejects.toThrow("unexpected");
+});

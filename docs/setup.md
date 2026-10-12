@@ -51,7 +51,12 @@ Reads run two vaults at a time and use the existing 30-second memory cache. A
 malformed or inaccessible vault reports an error beside the combined list while
 other environments remain available. Values stay masked by default. Revealing
 all values reveals the selected environments; hiding values or changing
-filters clears revealed values.
+filters clears revealed values. Already opened cells reuse their values in
+browser memory for immediate reopening, without exposing them in the masked
+list. Refresh, hiding values, changing environment filters, and connection
+errors clear that cache; saves invalidate the edited cell. Nothing is persisted
+to browser storage. After the server's vault snapshot expires, a single-cell
+reveal reads only the selected credential through the SDK.
 
 The grid supports keyboard navigation, inline editing, reveal/hide, notes,
 adding variables, and confirmed single or bulk deletion. Each row edit, rename,

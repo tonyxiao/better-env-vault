@@ -45,6 +45,11 @@ export class MemoryProvider implements Provider {
   async readVault(vault: string) {
     return structuredClone(this.vaults[vault] ?? []);
   }
+  async readItem(vault: string, id: string) {
+    const item = this.vaults[vault]?.find((item) => item.id === id);
+    if (!item) conflict();
+    return structuredClone(item);
+  }
   async save(
     vault: string,
     name: string,

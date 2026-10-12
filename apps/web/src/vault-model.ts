@@ -77,3 +77,63 @@ export function maskCatalog(catalog: VaultCatalog): VaultCatalog {
     }),
   };
 }
+
+export interface RevealedVaultValue {
+  editableValue: string;
+  value: string;
+  explicitValue: string;
+  notes: string;
+}
+/** Opened cells only; clearing prevents late requests from repopulating memory. */
+export class VaultValueCache {
+  private entries = new Map<
+    string,
+    {
+      rowId: string;
+      pending: Promise<RevealedVaultValue>;
+      value?: RevealedVaultValue;
+    }
+  >();
+  private key(row: VaultRow) {
+    return JSON.stringify([
+      row.id,
+      row.matrix.fingerprint,
+      row.variable.explicit?.version,
+    ]);
+  }
+  peek(row: VaultRow) {
+    return this.entries.get(this.key(row))?.value;
+  }
+  get(row: VaultRow, load: () => Promise<RevealedVaultValue>) {
+    const key = this.key(row);
+    const current = this.entries.get(key);
+    if (current) return current.pending;
+    const entry: {
+      rowId: string;
+      pending: Promise<RevealedVaultValue>;
+      value?: RevealedVaultValue;
+    } = { rowId: row.id, pending: Promise.resolve().then(load) };
+    this.entries.set(key, entry);
+    void entry.pending.then(
+      (value) => {
+        if (this.entries.get(key) === entry) entry.value = value;
+      },
+      () => {
+        if (this.entries.get(key) === entry) this.entries.delete(key);
+      },
+    );
+    return entry.pending;
+  }
+  invalidate(rowId: string) {
+    for (const [key, entry] of this.entries)
+      if (entry.rowId === rowId) this.entries.delete(key);
+  }
+  reconcile(rows: VaultRow[]) {
+    const keys = new Set(rows.map((row) => this.key(row)));
+    for (const key of this.entries.keys())
+      if (!keys.has(key)) this.entries.delete(key);
+  }
+  clear() {
+    this.entries.clear();
+  }
+}
