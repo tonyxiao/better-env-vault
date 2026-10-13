@@ -27,7 +27,8 @@
     "test:grid": "tsx scripts/test-grid.ts",
     "test:bulk-ui": "tsx scripts/test-bulk-ui.ts",
     "test:vaults": "tsx scripts/test-vaults.ts",
-    "test:vault-saves": "tsx scripts/test-vault-saves.ts"
+    "test:vault-saves": "tsx scripts/test-vault-saves.ts",
+    "test:vault-features": "tsx scripts/test-vault-features.ts"
   },
   "engines": {
     "node": ">=22"

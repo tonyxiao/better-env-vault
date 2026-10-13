@@ -98,19 +98,15 @@ function GridEditor({
   // refreshes must not turn an old draft into an unchecked overwrite.
   const versions = useRef(matrix.versions[row.name]).current;
   const fingerprint = useRef(matrix.fingerprint).current;
-  const initialValue =
-    environment === "schema"
-      ? { value: variable.defaultValue }
-      : allVisible
-        ? {
-            value:
-              matrix.editableValues?.[environment]?.[row.name] ??
-              variable.value,
-          }
-        : variable.state === "missing" ||
-            (!variable.sensitive && variable.state === "default")
-          ? { value: variable.value }
-          : undefined;
+  const initialValue = {
+    value:
+      environment === "schema"
+        ? variable.defaultValue
+        : (matrix.editableValues?.[environment]?.[row.name] ??
+          matrix.resolutions
+            .find((resolution) => resolution.environment === environment)
+            ?.variables.find((entry) => entry.name === row.name)?.value),
+  };
   function submit(payload: Record<string, unknown>) {
     const result = onSave({ fingerprint, ...payload });
     onClose(false);
@@ -210,6 +206,31 @@ export function MatrixGrid(props: Props) {
       ),
     }));
   }, [variables, matrix.environments, displayMatrix]);
+  const sortValues = useMemo(
+    () =>
+      Object.fromEntries(
+        matrix.resolutions.map((resolution) => [
+          resolution.environment,
+          new Map(
+            resolution.variables.map((variable) => [
+              variable.name,
+              variable.value ?? "",
+            ]),
+          ),
+        ]),
+      ),
+    [matrix],
+  );
+  const sortDefaults = useMemo(
+    () =>
+      new Map(
+        matrix.resolutions[0].variables.map((variable) => [
+          variable.name,
+          variable.defaultValue ?? "",
+        ]),
+      ),
+    [matrix],
+  );
   const rows = useMemo(
     () =>
       [...unsortedRows].sort((left, right) => {
@@ -218,10 +239,8 @@ export function MatrixGrid(props: Props) {
             sort.columnKey === "variable"
               ? row.name
               : sort.columnKey === "schema"
-                ? (row.definition.defaultValue ?? "")
-                : allVisible
-                  ? (row.cells[sort.columnKey]?.value ?? "")
-                  : "";
+                ? (sortDefaults.get(row.name) ?? "")
+                : (sortValues[sort.columnKey]?.get(row.name) ?? "");
           const order = value(left).localeCompare(value(right), undefined, {
             numeric: true,
           });
@@ -229,7 +248,7 @@ export function MatrixGrid(props: Props) {
         }
         return 0;
       }),
-    [unsortedRows, sortColumns, allVisible],
+    [unsortedRows, sortColumns, sortDefaults, sortValues],
   );
   useEffect(() => {
     grid.current?.setActivePosition({ rowIdx: -1, idx: 0 });
@@ -455,7 +474,7 @@ export function MatrixGrid(props: Props) {
     ].map((environment) => ({
       key: environment,
       name: environment === "schema" ? "Schema default" : environment,
-      sortable: environment === "schema" || allVisible,
+      sortable: true,
       minWidth: 220,
       resizable: true,
       cellClass: (row: GridRow) => {
@@ -538,7 +557,7 @@ export function MatrixGrid(props: Props) {
         <GridEditor
           {...editor}
           environment={environment}
-          matrix={displayMatrix}
+          matrix={matrix}
           allVisible={allVisible}
           hideEpoch={hideEpoch}
           onSave={onSave}

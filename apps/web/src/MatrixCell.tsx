@@ -1,4 +1,6 @@
-import { Check, Eye, EyeOff, LoaderCircle, X } from "lucide-react";
+import { Check, Code, Eye, EyeOff, LoaderCircle, X } from "lucide-react";
+import { JsonEditor } from "./JsonEditor.js";
+import { formatJson, isJsonContainer } from "./json-value.js";
 import { Button } from "./components/ui/button.js";
 import { Textarea } from "./components/ui/textarea.js";
 import { Checkbox } from "./components/ui/checkbox.js";
@@ -30,6 +32,7 @@ export function SpreadsheetEditor({
   compact = false,
   inputLabel,
   shiftEnterNewline = false,
+  allowJson = true,
   hideEpoch,
   initialValue,
   draftValue,
@@ -46,6 +49,7 @@ export function SpreadsheetEditor({
   compact?: boolean;
   inputLabel?: string;
   shiftEnterNewline?: boolean;
+  allowJson?: boolean;
   hideEpoch: number;
   initialValue?: { value?: string };
   draftValue?: string;
@@ -69,6 +73,13 @@ export function SpreadsheetEditor({
     ownEmpty && initialValue?.value === "",
   );
   const [shown, setShown] = useState(true);
+  const [jsonOpen, setJsonOpen] = useState(false);
+  const checkedJson = useRef(false);
+  useEffect(() => {
+    if (loading || checkedJson.current) return;
+    checkedJson.current = true;
+    if (allowJson && isJsonContainer(value)) setJsonOpen(true);
+  }, [loading, allowJson, value]);
   const initialHideEpoch = useRef(hideEpoch);
   const field = useRef<HTMLTextAreaElement>(null);
   const cancelButton = useRef<HTMLButtonElement>(null);
@@ -105,12 +116,22 @@ export function SpreadsheetEditor({
       cancelled = true;
     };
   }, []);
-  const dirty = value !== baseline || empty !== baselineEmpty;
+  let saveValue = value,
+    invalidJson = false;
+  if (jsonOpen) {
+    try {
+      saveValue = formatJson(value).compact;
+    } catch {
+      invalidJson = true;
+    }
+  }
+  const dirty = saveValue !== baseline || empty !== baselineEmpty;
   // Clearing a previously populated cell is deliberate. Opening an already
   // empty/missing cell still requires explicit intent before creating an item.
   const canSave =
     !loading &&
     !failedLoad &&
+    !invalidJson &&
     dirty &&
     (value !== "" || empty || baseline !== "");
   useEffect(() => {
@@ -132,13 +153,13 @@ export function SpreadsheetEditor({
   }, [hideEpoch, variable.sensitive]);
   useLayoutEffect(() => {
     onCommitReady(() => {
-      if (canSave) void onLeave(value);
+      if (canSave) void onLeave(saveValue);
     });
     return () => onCommitReady(undefined);
-  }, [canSave, value, onLeave, onCommitReady]);
+  }, [canSave, saveValue, onLeave, onCommitReady]);
   function save(event: FormEvent) {
     event.preventDefault();
-    if (canSave) void onSave(value);
+    if (canSave) void onSave(saveValue);
   }
   return (
     <form
@@ -177,7 +198,7 @@ export function SpreadsheetEditor({
         event.preventDefault();
         event.stopPropagation();
         if (loading || failedLoad || (dirty && !canSave)) return;
-        if (canSave) void onSave(value);
+        if (canSave) void onSave(saveValue);
         else onCancel();
         if (event.key === "Tab")
           onNavigate(event.shiftKey ? "previous" : "next");
@@ -185,6 +206,18 @@ export function SpreadsheetEditor({
           onNavigate(event.shiftKey ? "up" : "down");
       }}
     >
+      {jsonOpen && shown ? (
+        <JsonEditor
+          label={`JSON value for ${variable.name} in ${environment}`}
+          initialValue={value}
+          onChange={setValue}
+          onSave={(compact) => {
+            void onSave(compact);
+          }}
+          onCancel={onCancel}
+          onPlainText={() => setJsonOpen(false)}
+        />
+      ) : null}
       <div className="spreadsheet-control">
         {loading ? (
           <span className="spreadsheet-loading" role="status">
@@ -238,6 +271,18 @@ export function SpreadsheetEditor({
             />
             <span className="sr-only">Set an explicit empty value</span>
           </label>
+        ) : null}
+        {allowJson && shown && !loading && !failedLoad ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Edit JSON"
+            title="Edit as formatted JSON"
+            onClick={() => setJsonOpen(true)}
+          >
+            <Code aria-hidden="true" />
+          </Button>
         ) : null}
         <Button
           type="submit"

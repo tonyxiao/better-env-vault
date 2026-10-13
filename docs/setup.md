@@ -42,23 +42,27 @@ below.
 
 The secrets list shows every accessible environment together. Each vault is an
 isolated environment; matching names in different vaults appear as separate
-rows with their environment labels. Search secret names, environment names, notes, and account metadata across the
-combined list. Click column headers to sort ascending or descending; Ctrl/Cmd-click
-adds a secondary sort. Values can be sorted after revealing them. Environment filter buttons support
+rows with their environment labels. Search secret names, values, environment names, notes, and account metadata across the
+combined list, including values whose cells are masked. Click column headers to sort ascending or descending; Ctrl/Cmd-click
+adds a secondary sort. Values can be sorted while masked or shown. Environment filter buttons support
 multiple selections; **All environments** clears the selection. Filtering and
 search run locally. **Refresh** rescans environments and reloads their secrets.
 
-Reads run two vaults at a time and use the existing 30-second memory cache. A
-inaccessible vault reports an error beside the combined list while other
-environments remain available. Incompatible credential items are skipped with
-item-level diagnostics; compatible secrets in the same vault stay available. Values stay masked by default. Revealing
-all values reveals the selected environments; hiding values or changing
-filters clears revealed values. Already opened cells reuse their values in
-browser memory for immediate reopening, without exposing them in the masked
-list. Refresh, hiding values, changing environment filters, and connection
-errors clear that cache; saves invalidate the edited cell. Nothing is persisted
-to browser storage. After the server's vault snapshot expires, a single-cell
-reveal reads only the selected credential through the SDK.
+Choose **Group by environment** from the grouping selector to show collapsible
+sections with matching-secret counts. Each vault has its own group; account
+labels distinguish vaults with the same name. Search expands matching sections,
+and sorting applies inside groups. Switch to **No grouping** for the flat list.
+Group selection selects the matching secrets in that environment.
+
+Reads run two vaults at a time and use the existing 30-second server memory cache.
+An inaccessible vault reports an error while other environments remain available.
+Incompatible credentials are skipped with item-level diagnostics.
+Authenticated browser loads include values in memory for searching and editing.
+Cells remain masked by default; showing/hiding values and opening an editor
+use the loaded data without another request. Masking is a display preference
+and does not erase the in-memory values. Refresh replaces the loaded data, and
+a failed load, browser disconnection, or closing the page clears it. Values are never persisted to
+browser storage. Saves still validate fresh item versions against 1Password.
 
 In vault mode, Enter/Tab and moving to another grid cell save a changed edit.
 Searching, filtering, sorting, Refresh, and the toolbar retain an unfinished
@@ -69,6 +73,14 @@ Save conflicts retain your draft and require reviewing the latest field before
 **Save reviewed draft**; a further concurrent change still rejects the save.
 Successful saves update the affected vault's verified result without reloading
 the whole catalog. The row stays blocked until that result is applied.
+
+Object and array JSON values open a dedicated editor automatically when edited.
+Use **Edit JSON** in a regular value editor for other JSON values. The JSON editor
+shows formatted, syntax-highlighted text; Enter adds a line and Tab indents.
+**Format** reformats valid input. **Save JSON** or Ctrl/Cmd+Enter validates and
+saves a compact JSON string, preserving number tokens and string contents.
+Invalid JSON disables saving. **Use plain text** returns to ordinary text editing.
+Notes are always edited as text. The JSON editor also works in schema mode.
 
 Notes are visible in their own grid column and support inline editing, including
 multiline text with Shift+Enter or Alt+Enter. Enter saves the note. Notes-only saves preserve the credential value
@@ -89,9 +101,8 @@ name and a single `credential` field. Login and other item categories are not
 environment variables and are excluded. A vault with invalid or duplicate API
 Credential names reports item-level diagnostics and excludes those items; compatible
 credentials in the same vault remain available. Schema mode still requires strict names.
-Notes are included in the authenticated grid response. Secret values are
-returned only by protected reveal requests, or a save explicitly requesting
-revealed results while values are already visible.
+Notes and values are included in authenticated browser loads. Default metadata
+API responses remain masked; browser loads explicitly request in-memory values.
 
 An explicit schema path must exist and be valid; a missing or invalid supplied
 schema never falls back to vault discovery. Export, check, explain, and run still
@@ -353,10 +364,10 @@ exact 1Password vault name and full vault ID. Names come from the authenticated
 environment labels. The schema-default column has no vault.
 
 The matrix shows schema defaults, explicit overrides, inherited values, and
-missing/invalid values. Search by name or description and filter missing,
-invalid, or overridden values. Sensitive cells use a fixed mask. **Reveal
-current value** retrieves only the selected cell; closing the editor or changing
-projects discards the revealed value.
+missing/invalid values. Search by name, description, value, or notes and filter
+missing, invalid, or overridden values. Search includes masked values. Sensitive
+cells use a fixed visual mask until shown or opened for editing. Changing projects
+clears the previous project's loaded values.
 
 The eye icon toggles **Reveal all values** / **Hide all values** for the current
 project, including every environment column. Revealed values stay only in memory
@@ -417,17 +428,18 @@ To deliberately clear a value, select **Set an explicit empty value**; use
 
 The UI uses React Data Grid for the matrix and shadcn/ui components, Radix
 primitives, Tailwind CSS, and Lucide icons for its controls.
-Revealing the matrix keeps raw editable values in browser memory, so opening an
-inline editor reuses the loaded value. Search, filters, and hide/show interaction
-run locally. Browser values are never stored in localStorage or on disk.
+Loading the matrix keeps raw editable values in browser memory, so opening an
+inline editor, searching by value, and toggling visibility need no additional
+request. Search, filters, and hide/show interaction run locally. Browser values are never stored in localStorage or on disk.
 
 The local server caches resolved vault snapshots in process memory for 30 seconds
 and shares in-flight reads. **Refresh** bypasses that cache, so external 1Password
 changes appear immediately when requested. Saves invalidate cached snapshots;
 schema changes and provider errors also force new reads. Cached snapshots expire
 and are dropped from the server cache. CLI loads and mutation checks always read
-fresh values from 1Password. Hiding values clears the browser's revealed matrix;
-server memory follows its separate 30-second expiry.
+fresh values from 1Password. Hiding values only changes their presentation;
+server memory follows its separate 30-second expiry. Browser values stay in
+memory until replaced by Refresh, a project change, a failed load, browser disconnection, or page closure.
 
 SDK connection attempts are shared between simultaneous requests. After a
 provider authorization error, an explicit refresh establishes a fresh SDK
@@ -483,7 +495,9 @@ If interrupted, `.local/ui-test-recovery.json` identifies only that test fixture
 
 `npm run test:vault-saves` verifies blocked saves, rapid follow-up editing, local
 drafts, and reviewed conflict recovery with a memory provider. CI runs this
-browser regression suite with Chromium.
+browser regression suite with Chromium. `npm run test:vault-features` covers
+grouping, duplicate environment names, local value search/visibility, and JSON
+editing in both modes; CI runs it too.
 
 `npm run test:vaults` verifies discovery, vault isolation, search, inline editing,
 masking, empty vaults, creation, renaming, and deletion using a memory provider.

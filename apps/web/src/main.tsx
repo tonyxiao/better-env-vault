@@ -99,12 +99,9 @@ function App() {
   const pending = useRef(new Set<string>());
   const projectRef = useRef(project);
   projectRef.current = project;
-  const [revealedMatrix, setRevealedMatrix] = useState<Matrix>();
   const [allVisible, setAllVisible] = useState(false);
-  const [revealingAll, setRevealingAll] = useState(false);
   const [hideEpoch, setHideEpoch] = useState(0);
   const visibleIntent = useRef(false);
-  const visibilityGeneration = useRef(0);
   const matrixRef = useRef<Matrix | undefined>(undefined);
   const token = useRef("");
   const loadId = useRef(0);
@@ -121,11 +118,8 @@ function App() {
     setOperations({});
     setSelectedRows(new Set());
     setGridResetEpoch((epoch) => epoch + 1);
-    setRevealedMatrix(undefined);
     setAllVisible(false);
-    setRevealingAll(false);
     visibleIntent.current = false;
-    ++visibilityGeneration.current;
     matrixRef.current = undefined;
     token.current = "";
     ++loadId.current;
@@ -185,56 +179,20 @@ function App() {
       if (!quiet) setBusy(true);
       setReadPending(true);
       setError("");
-      const generation = visibilityGeneration.current;
       try {
-        let response: Matrix;
-        if (visibleIntent.current && matrixRef.current) {
-          try {
-            response = await request<Matrix>(
-              `/api/reveal-all?project=${encodeURIComponent(project)}${fresh ? "&fresh=1" : ""}`,
-              {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  "X-Bev-Mutation": token.current,
-                },
-                body: JSON.stringify({
-                  fingerprint: matrixRef.current.fingerprint,
-                }),
-              },
-            );
-          } catch (error) {
-            if (!(error instanceof ApiError && error.code === "conflict"))
-              throw error;
-            visibleIntent.current = false;
-            setAllVisible(false);
-            setRevealedMatrix(undefined);
-            setHideEpoch((epoch) => epoch + 1);
-            response = await request<Matrix>(
-              `/api/matrix?project=${encodeURIComponent(project)}${fresh ? "&fresh=1" : ""}`,
-            );
-          }
-        } else
-          response = await request<Matrix>(
-            `/api/matrix?project=${encodeURIComponent(project)}${fresh ? "&fresh=1" : ""}`,
-          );
+        const response = await request<Matrix>(
+          `/api/matrix?project=${encodeURIComponent(project)}&values=1${fresh ? "&fresh=1" : ""}`,
+        );
         if (loadId.current === id) {
-          const masked = maskedMatrix(response);
-          matrixRef.current = masked;
-          setMatrix(masked);
-          if (
-            visibleIntent.current &&
-            visibilityGeneration.current === generation
-          ) {
-            setRevealedMatrix(response);
-            setAllVisible(true);
-          }
+          matrixRef.current = response;
+          setMatrix(response);
         }
       } catch (error) {
         if (loadId.current === id) {
+          matrixRef.current = undefined;
+          setMatrix(undefined);
           visibleIntent.current = false;
           setAllVisible(false);
-          setRevealedMatrix(undefined);
           setHideEpoch((epoch) => epoch + 1);
           if (error instanceof ApiError && error.code === "session")
             disconnect();
@@ -256,11 +214,8 @@ function App() {
     setSelectedRows(new Set());
     setFilter("all");
     setGridResetEpoch((epoch) => epoch + 1);
-    setRevealedMatrix(undefined);
     setAllVisible(false);
-    setRevealingAll(false);
     visibleIntent.current = false;
-    ++visibilityGeneration.current;
     matrixRef.current = undefined;
     void refresh();
     return () => {
@@ -391,94 +346,58 @@ function App() {
     }
   }
   async function reveal(environment: string, name: string) {
-    try {
-      return await request<{
-        value?: string;
-        explicitValue?: string;
-        editableValue?: string;
-        notes: string;
-      }>(`/api/reveal?project=${encodeURIComponent(project)}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Bev-Mutation": token.current,
-        },
-        body: JSON.stringify({
-          environment,
-          name,
-          fingerprint: matrix?.fingerprint,
-        }),
-      });
-    } catch (error) {
-      if (error instanceof ApiError && error.code === "session") disconnect();
-      throw error;
-    }
+    const current = matrixRef.current;
+    const record = current?.resolutions
+      .find((resolution) => resolution.environment === environment)
+      ?.variables.find((variable) => variable.name === name);
+    if (!record)
+      throw new Error("This value is unavailable. Refresh and try again.");
+    const editableValue =
+      current?.editableValues?.[environment]?.[name] ?? record.value;
+    return {
+      value: record.value,
+      editableValue,
+      explicitValue: record.state === "explicit" ? editableValue : undefined,
+      notes: current?.environmentNotes?.[environment]?.[name] ?? "",
+    };
   }
-  async function toggleAll() {
-    if (visibleIntent.current) {
-      visibleIntent.current = false;
-      ++visibilityGeneration.current;
-      setRevealedMatrix(undefined);
-      setAllVisible(false);
-      setRevealingAll(false);
-      setHideEpoch((epoch) => epoch + 1);
-      return;
-    }
-    if (!matrix) return;
-    visibleIntent.current = true;
-    const generation = ++visibilityGeneration.current;
-    const id = ++loadId.current;
-    setRevealingAll(true);
-    setError("");
-    try {
-      const response = await request<Matrix>(
-        `/api/reveal-all?project=${encodeURIComponent(project)}`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Bev-Mutation": token.current,
-          },
-          body: JSON.stringify({ fingerprint: matrix.fingerprint }),
-        },
-      );
-      if (generation !== visibilityGeneration.current || id !== loadId.current)
-        return;
-      const masked = maskedMatrix(response);
-      matrixRef.current = masked;
-      setMatrix(masked);
-      setRevealedMatrix(response);
-      setAllVisible(true);
-    } catch (error) {
-      if (generation !== visibilityGeneration.current) return;
-      visibleIntent.current = false;
-      setRevealedMatrix(undefined);
-      setAllVisible(false);
-      if (error instanceof ApiError && error.code === "session") disconnect();
-      else setError((error as Error).message);
-    } finally {
-      if (generation === visibilityGeneration.current) setRevealingAll(false);
-    }
+  function toggleAll() {
+    const next = !visibleIntent.current;
+    visibleIntent.current = next;
+    setAllVisible(next);
+    if (!next) setHideEpoch((epoch) => epoch + 1);
   }
-  const displayMatrix = allVisible && revealedMatrix ? revealedMatrix : matrix;
+  const displayMatrix = useMemo(
+    () => matrix && (allVisible ? matrix : maskedMatrix(matrix)),
+    [matrix, allVisible],
+  );
 
   const rows = displayMatrix?.resolutions[0]?.variables ?? [];
   const visible = useMemo(() => {
     const lookups =
-      filter === "all"
-        ? []
-        : (matrix?.resolutions.map(
-            (resolution) =>
-              new Map(
-                resolution.variables.map((variable) => [
-                  variable.name,
-                  variable,
-                ]),
-              ),
-          ) ?? []);
+      matrix?.resolutions.map(
+        (resolution) =>
+          new Map(
+            resolution.variables.map((variable) => [variable.name, variable]),
+          ),
+      ) ?? [];
     return rows.filter((row) => {
       if (
-        !`${row.name} ${row.description}`
+        ![
+          row.name,
+          row.description,
+          ...lookups.flatMap((lookup, index) => {
+            const variable = lookup.get(row.name);
+            const env = matrix!.resolutions[index].environment;
+            return [
+              variable?.value ?? "",
+              variable?.defaultValue ?? "",
+              matrix!.editableValues?.[env]?.[row.name] ?? "",
+              matrix!.environmentNotes?.[env]?.[row.name] ?? "",
+            ];
+          }),
+        ]
+          .join(" ")
           .toLowerCase()
           .includes(search.toLowerCase())
       )
@@ -664,7 +583,7 @@ function App() {
               placeholder={
                 vaultMode
                   ? "Search variables…"
-                  : "Search variables or descriptions…"
+                  : "Search names, descriptions, values, or notes…"
               }
               value={search}
               onChange={(e) => {
@@ -752,27 +671,19 @@ function App() {
                 size="icon"
                 className="visibility-toggle"
                 aria-label={
-                  allVisible || revealingAll
-                    ? "Hide all values"
-                    : "Reveal all values"
+                  allVisible ? "Hide all values" : "Reveal all values"
                 }
-                title={
-                  allVisible || revealingAll
-                    ? "Hide all values"
-                    : "Reveal all values"
-                }
-                aria-pressed={allVisible || revealingAll}
-                aria-busy={revealingAll}
+                title={allVisible ? "Hide all values" : "Reveal all values"}
+                aria-pressed={allVisible}
+                aria-busy={false}
                 disabled={busy || !matrix}
                 onClick={() => void toggleAll()}
               >
-                <EyeIcon hidden={allVisible || revealingAll} />
+                <EyeIcon hidden={allVisible} />
               </Button>
             </TooltipTrigger>
             <TooltipContent>
-              {allVisible || revealingAll
-                ? "Hide all values"
-                : "Reveal all values"}
+              {allVisible ? "Hide all values" : "Reveal all values"}
             </TooltipContent>
           </Tooltip>
           <Button
@@ -900,9 +811,7 @@ function App() {
                   <span>
                     {allVisible
                       ? "All matrix values are visible."
-                      : revealingAll
-                        ? "Revealing all values…"
-                        : "Sensitive values stay masked until revealed."}
+                      : "Sensitive values stay masked until revealed."}
                   </span>
                 </>
               )}

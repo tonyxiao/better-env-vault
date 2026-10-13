@@ -349,21 +349,17 @@ try {
     "Unchanged inherited cells never create overrides.",
   );
   await page.keyboard.press("Escape");
-  await page.route("**/api/reveal?*", (route) =>
-    route.fulfill({
-      status: 409,
-      contentType: "application/json",
-      body: JSON.stringify({ error: "Fixture read failed.", code: "conflict" }),
-    }),
-  );
+  let cellRequests = 0;
+  await page.route("**/api/reveal?*", (route) => {
+    cellRequests++;
+    return route.abort();
+  });
   await edit("LABEL", "dev");
-  await form("LABEL", "dev").getByRole("alert").waitFor();
+  await form("LABEL", "dev").getByRole("textbox").waitFor();
   assert.equal(
-    await form("LABEL", "dev")
-      .getByRole("button", { name: "Cancel", exact: true })
-      .evaluate((element) => element === document.activeElement),
-    true,
-    "A failed read must leave keyboard focus on Cancel.",
+    cellRequests,
+    0,
+    "Editing a masked cell must reuse the authenticated in-memory value",
   );
   await page.keyboard.press("Escape");
   await form("LABEL", "dev").waitFor({ state: "hidden" });

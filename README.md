@@ -15,8 +15,9 @@ For schema-based projects, the core model is:
   and variable definitions; no separate project configuration file is needed.
 - Non-sensitive `.env.schema` defaults form the base layer.
 - Environment vaults override those defaults in a configured fallback order.
-- Secret values stay in 1Password. The schema contains definitions and optional
-  non-sensitive defaults.
+- 1Password is the authoritative secret store. The web editor keeps loaded
+  values in browser memory for local search and editing; masking controls display.
+  The schema contains definitions and optional non-sensitive defaults.
 - A shared resolver powers both shell exports and the web app so the displayed
   effective values match the values applications receive.
 

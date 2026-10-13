@@ -234,7 +234,11 @@ export async function startServer(options: {
               json(
                 response,
                 200,
-                await browser.catalog(url.searchParams.get("fresh") === "1"),
+                await browser.catalog(
+                  url.searchParams.get("fresh") === "1",
+                  undefined,
+                  url.searchParams.get("values") === "1",
+                ),
               );
             else if (
               url.pathname === "/api/catalog/reveal" &&
@@ -269,6 +273,7 @@ export async function startServer(options: {
                   false,
                   undefined,
                   url.searchParams.get("fresh") === "1",
+                  url.searchParams.get("values") === "1",
                 ),
               );
             else if (
@@ -382,18 +387,33 @@ export async function startServer(options: {
               );
           }
           const { snapshot, resolutions, vaults } = await readSnapshot();
+          const includeValues =
+            revealAll || url.searchParams.get("values") === "1";
           const environments = Object.keys(schema.config.environments);
+          const declaredNames = new Set(
+            schema.parsed.configItems.map((item) => item.key),
+          );
           json(response, 200, {
             fingerprint: schema.fingerprint,
             config: schema.config,
             vaults,
             schemaPath: schema.path,
             environments,
-            resolutions: revealAll
+            resolutions: includeValues
               ? resolutions
               : resolutions.map(publicResolution),
-            ...(revealAll
+            ...(includeValues
               ? {
+                  environmentNotes: Object.fromEntries(
+                    environments.map((env) => [
+                      env,
+                      Object.fromEntries(
+                        snapshot[env]
+                          .filter((item) => declaredNames.has(item.name))
+                          .map((item) => [item.name, item.notes]),
+                      ),
+                    ]),
+                  ),
                   editableValues: Object.fromEntries(
                     resolutions.map((resolution) => [
                       resolution.environment,

@@ -540,3 +540,44 @@ it("exposes only configured vault metadata and protects confirmed bulk deletion"
     await app.close();
   }
 });
+
+it("authenticates eager browser values and notes without exposing unmanaged contents or extra SDK reads", async () => {
+  const schema = await fixture("# @optional\nTOKEN=\n");
+  const provider = new MemoryProvider();
+  await provider.save(
+    config.environments.dev.vault,
+    "TOKEN",
+    "value-search-fixture",
+    "declared notes",
+  );
+  await provider.save(
+    config.environments.dev.vault,
+    "UNMANAGED",
+    "unmanaged-private",
+    "unmanaged-private-notes",
+  );
+  const read = vi.spyOn(provider, "readVault");
+  const app = await startServer({ schemas: [schema.path], provider });
+  try {
+    const endpoint = "/api/matrix?project=0&values=1";
+    expect((await fetch(app.url + endpoint)).status).toBe(401);
+    const session = await fetch(app.url + "/api/session", {
+      method: "POST",
+      headers: { Origin: app.url, "Content-Type": "application/json" },
+      body: JSON.stringify({ token: app.bootstrap }),
+    });
+    const cookie = session.headers.get("set-cookie")!.split(";")[0];
+    const headers = { Cookie: cookie };
+    const response = await fetch(app.url + endpoint, { headers });
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    const matrix = await response.json();
+    expect(matrix.editableValues.dev.TOKEN).toBe("value-search-fixture");
+    expect(matrix.environmentNotes.dev.TOKEN).toBe("declared notes");
+    expect(JSON.stringify(matrix)).not.toMatch(/unmanaged-private/);
+    const calls = read.mock.calls.length;
+    await fetch(app.url + endpoint, { headers });
+    expect(read).toHaveBeenCalledTimes(calls);
+  } finally {
+    await app.close();
+  }
+});

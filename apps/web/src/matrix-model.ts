@@ -16,6 +16,7 @@ export interface Matrix {
   versions: Record<string, Record<string, number | null>>;
   editableValues?: Record<string, Record<string, string | undefined>>;
   notes?: Record<string, string>;
+  environmentNotes?: Record<string, Record<string, string>>;
 }
 export interface Cell {
   environment: string;

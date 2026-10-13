@@ -52,7 +52,7 @@ export function filterVaultRows(
     (row) =>
       (!environments.size || environments.has(row.vaultId)) &&
       terms.every((term) =>
-        `${row.variable.name} ${row.environment.name} ${row.environment.account ?? ""} ${row.notes}`
+        `${row.variable.name} ${row.environment.name} ${row.environment.account ?? ""} ${row.notes} ${row.variable.value ?? ""}`
           .toLowerCase()
           .includes(term),
       ),
@@ -85,6 +85,35 @@ export function sortVaultRows(
       if (order) return sort.direction === "DESC" ? -order : order;
     }
     return 0;
+  });
+}
+export function groupVaultRows(rows: readonly VaultRow[], descending = false) {
+  const groups = new Map<
+    string,
+    { environment: VaultEnvironment; rows: VaultRow[] }
+  >();
+  for (const row of rows) {
+    let group = groups.get(row.vaultId);
+    if (!group)
+      groups.set(
+        row.vaultId,
+        (group = { environment: row.environment, rows: [] }),
+      );
+    group.rows.push(row);
+  }
+  const collator = new Intl.Collator(undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+  return [...groups.values()].sort((a, b) => {
+    const order =
+      collator.compare(a.environment.name, b.environment.name) ||
+      collator.compare(
+        a.environment.account ?? "",
+        b.environment.account ?? "",
+      ) ||
+      a.environment.id.localeCompare(b.environment.id);
+    return descending ? -order : order;
   });
 }
 export function maskCatalog(catalog: VaultCatalog): VaultCatalog {

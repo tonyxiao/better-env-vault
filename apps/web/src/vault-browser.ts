@@ -165,7 +165,11 @@ export class VaultBrowser {
       fresh,
     );
   }
-  async catalog(fresh = false, fingerprints?: Record<string, string>) {
+  async catalog(
+    fresh = false,
+    fingerprints?: Record<string, string>,
+    includeValues = false,
+  ) {
     const environments = await this.projects();
     const matrices: {
       id: string;
@@ -182,6 +186,7 @@ export class VaultBrowser {
               fingerprints !== undefined && Object.hasOwn(fingerprints, env.id),
               fingerprints?.[env.id],
               fresh,
+              includeValues,
             );
             matrices.push({ id: env.id, matrix });
             const warnings = this.warnings.get(env.id) ?? [];
@@ -221,12 +226,18 @@ export class VaultBrowser {
           : "desktop"),
     };
   }
-  async matrix(id: string, reveal: boolean, expected?: string, fresh = false) {
+  async matrix(
+    id: string,
+    reveal: boolean,
+    expected?: string,
+    fresh = false,
+    includeValues = false,
+  ) {
     const vault = this.vault(id);
     const items = await this.items(id, fresh);
     const stamp = identity(vault, items);
     if (reveal && expected !== stamp) conflict();
-    return this.matrixFromItems(id, items, reveal);
+    return this.matrixFromItems(id, items, reveal || includeValues);
   }
   private matrixFromItems(id: string, items: VaultItem[], reveal: boolean) {
     const vault = this.vault(id);

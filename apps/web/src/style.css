@@ -878,3 +878,91 @@ main {
 .vault-grid .field-progress {
   top: 5px;
 }
+
+.group-control {
+  min-width: 170px;
+}
+.vault-group-toggle {
+  width: 100%;
+  justify-content: flex-start;
+  padding: 2px 4px;
+  height: 28px;
+}
+.vault-group-toggle > span:first-of-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vault-grid [aria-expanded] {
+  background: var(--muted);
+}
+.json-drawer {
+  padding: 24px;
+  overflow-y: auto;
+}
+.json-code-editor {
+  position: relative;
+  height: min(60dvh, 560px);
+  min-height: 240px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fafafa;
+}
+.json-highlight,
+.json-input {
+  margin: 0;
+  padding: 14px;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  font:
+    13px/1.6 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  tab-size: 2;
+  white-space: pre;
+  overflow: auto;
+  border: 0;
+  letter-spacing: normal;
+}
+.json-highlight {
+  pointer-events: none;
+}
+.json-input {
+  position: absolute;
+  inset: 0;
+  resize: none;
+  background: transparent;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  caret-color: #111;
+  outline-offset: 2px;
+}
+.json-input::selection {
+  background: #93c5fd66;
+}
+.json-key {
+  color: #7c3aed;
+}
+.json-string {
+  color: #047857;
+}
+.json-number {
+  color: #1d4ed8;
+}
+.json-literal {
+  color: #b45309;
+}
+.json-punctuation {
+  color: #374151;
+}
+.json-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.json-error {
+  color: var(--destructive);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}

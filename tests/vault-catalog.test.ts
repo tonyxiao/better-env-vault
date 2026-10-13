@@ -3,6 +3,7 @@ import { VaultBrowser } from "../apps/web/src/vault-browser.js";
 import {
   catalogRows,
   filterVaultRows,
+  groupVaultRows,
   maskCatalog,
   type VaultCatalog,
 } from "../apps/web/src/vault-model.js";
@@ -286,4 +287,29 @@ it("orders create destinations independently of concurrent read completion", asy
   expect(catalog.matrices.map((entry) => entry.id)).toEqual(
     catalog.environments.map((env) => env.id),
   );
+});
+
+it("groups by vault identity and searches values independently of presentation masking", async () => {
+  const { browser, provider } = await fixture();
+  provider.listVaults = async () => [
+    { id: dev, name: "Shared", account: "personal" },
+    { id: prod, name: "Shared", account: "work" },
+    { id: staging, name: "Other" },
+  ];
+  const read = vi.spyOn(provider, "readVault");
+  const full = (await browser.catalog(false, undefined, true)) as VaultCatalog;
+  const rows = catalogRows(full);
+  expect(
+    filterVaultRows(rows, "private-prod", new Set()).map((row) => row.vaultId),
+  ).toEqual([prod]);
+  expect(filterVaultRows(rows, "private-prod", new Set([dev]))).toEqual([]);
+  const groups = groupVaultRows(rows);
+  expect(groups.map((group) => group.environment.id)).toEqual([dev, prod]);
+  expect(groups.map((group) => group.rows.length)).toEqual([1, 2]);
+  expect(
+    groupVaultRows(rows, true).map((group) => group.environment.id),
+  ).toEqual([prod, dev]);
+  const calls = read.mock.calls.length;
+  await browser.catalog(false, undefined, true);
+  expect(read).toHaveBeenCalledTimes(calls);
 });

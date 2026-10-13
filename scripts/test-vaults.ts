@@ -29,7 +29,7 @@ try {
     (resolve) => (releaseInitial = resolve),
   );
   let gateInitial = true;
-  await page.route("**/api/catalog", async (route) => {
+  await page.route(/\/api\/catalog(?:\?|$)/, async (route) => {
     if (gateInitial) await initialGate;
     await route.continue();
   });
