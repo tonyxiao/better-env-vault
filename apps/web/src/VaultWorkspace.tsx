@@ -41,6 +41,8 @@ import {
 import { Dialog, Editor, ProjectDialog } from "./edit-dialogs.js";
 import {
   catalogRows,
+  applyCatalogEvent,
+  type VaultCatalogEvent,
   filterVaultRows,
   groupVaultRows,
   sortVaultRows,
@@ -182,6 +184,14 @@ export function VaultWorkspace({
   const catalogRef = useRef<VaultCatalog | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [readPending, setReadPending] = useState(false);
+  const [progress, setProgress] = useState<{
+    completed: number;
+    total: number;
+  }>();
+  const [loadedVaults, setLoadedVaults] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
+  const catalogLoad = useRef<AbortController | undefined>(undefined);
   const [sortColumns, setSortColumns] = useState<readonly SortColumn[]>([
     { columnKey: "name", direction: "ASC" },
   ]);
@@ -301,24 +311,124 @@ export function VaultWorkspace({
   }, []);
   const load = useCallback(
     async (fresh = false, quiet = false) => {
+      catalogLoad.current?.abort();
+      const controller = new AbortController();
+      catalogLoad.current = controller;
       const id = ++loadId.current;
       if (!quiet) setLoading(true);
       setReadPending(true);
+      setProgress(undefined);
       setError("");
+      let completed = false;
+      const loaded = new Set<string>();
       try {
-        let data = await api<VaultCatalog>(
-          `/api/catalog?values=1${fresh ? "&fresh=1" : ""}`,
+        const response = await fetch(
+          `/api/catalog?stream=1&values=1${fresh ? "&fresh=1" : ""}`,
+          { cache: "no-store", signal: controller.signal },
         );
-        if (!alive.current || id !== loadId.current) return;
-        catalogRef.current = data;
-        setCatalog(data);
-        const available = new Set(catalogRows(data).map((row) => row.id));
-        setSelected(
-          (previous) =>
-            new Set([...previous].filter((id) => available.has(id))),
-        );
+        if (!response.ok) {
+          const data = await response.json();
+          throw new RequestError(
+            data.error ?? "Could not load vaults.",
+            data.code,
+          );
+        }
+        // Older running CLIs may still serve a whole JSON catalog after a web rebuild.
+        if (
+          response.headers.get("content-type")?.includes("application/json")
+        ) {
+          const data = (await response.json()) as VaultCatalog;
+          if (!alive.current || id !== loadId.current) return;
+          catalogRef.current = data;
+          setCatalog(data);
+          setLoadedVaults(new Set(data.environments.map((env) => env.id)));
+          setProgress({
+            completed: data.environments.length,
+            total: data.environments.length,
+          });
+          const available = new Set(catalogRows(data).map((row) => row.id));
+          setSelected(
+            (previous) =>
+              new Set([...previous].filter((id) => available.has(id))),
+          );
+          completed = true;
+          return;
+        }
+        if (!response.body) throw new Error("Catalog response has no stream.");
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        const receive = (line: string) => {
+          if (!line.trim() || !alive.current || id !== loadId.current) return;
+          const event = JSON.parse(line) as
+            | VaultCatalogEvent
+            | { type: "fatal"; error: string; code?: string };
+          if (event.type === "fatal")
+            throw new RequestError(event.error, event.code);
+          if (event.type === "start") {
+            const data = applyCatalogEvent(
+              { environments: [], matrices: [], errors: [], auth: event.auth },
+              event,
+            );
+            catalogRef.current = data;
+            setCatalog(data);
+            setLoadedVaults(new Set());
+            setProgress({ completed: 0, total: event.environments.length });
+          } else {
+            if (!catalogRef.current)
+              throw new Error("Catalog stream has no environment list.");
+            const data = applyCatalogEvent(catalogRef.current, event);
+            catalogRef.current = data;
+            setCatalog(data);
+            if (event.type === "complete") {
+              completed = true;
+              const available = new Set(catalogRows(data).map((row) => row.id));
+              setSelected(
+                (previous) =>
+                  new Set([...previous].filter((id) => available.has(id))),
+              );
+            } else {
+              loaded.add(event.id);
+              setLoadedVaults(new Set(loaded));
+              setProgress({
+                completed: loaded.size,
+                total: data.environments.length,
+              });
+              setLoading(false);
+            }
+          }
+        };
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            buffer += done
+              ? decoder.decode()
+              : decoder.decode(value, { stream: true });
+            let newline: number;
+            while ((newline = buffer.indexOf("\n")) !== -1) {
+              receive(buffer.slice(0, newline));
+              buffer = buffer.slice(newline + 1);
+            }
+            if (done) {
+              if (buffer.trim()) receive(buffer);
+              break;
+            }
+          }
+          if (!completed && id === loadId.current)
+            throw new Error(
+              "Vault loading was interrupted. Refresh to try again.",
+            );
+        } finally {
+          await reader.cancel().catch(() => {});
+        }
       } catch (error) {
-        if (alive.current && id === loadId.current) {
+        if (
+          !controller.signal.aborted &&
+          alive.current &&
+          id === loadId.current
+        ) {
+          if (error instanceof RequestError && error.code === "session")
+            onDisconnect();
           hide();
           setCatalog(undefined);
           catalogRef.current = undefined;
@@ -331,7 +441,7 @@ export function VaultWorkspace({
         }
       }
     },
-    [api, hide],
+    [hide, onDisconnect],
   );
   useEffect(() => {
     if (!mutationToken) return;
@@ -339,6 +449,7 @@ export function VaultWorkspace({
     void load();
     return () => {
       alive.current = false;
+      catalogLoad.current?.abort();
       ++loadId.current;
     };
   }, [load, mutationToken]);
@@ -409,29 +520,17 @@ export function VaultWorkspace({
     };
   }
   function patchMatrix(id: string, matrix: Matrix) {
-    ++loadId.current;
-    setLoading(false);
-    setReadPending(false);
-    setCatalog((previous) => {
-      if (!previous) return previous;
-      const current = previous.matrices.find(
-        (entry) => entry.id === id,
-      )?.matrix;
-      if ((current?.revision ?? 0) > (matrix.revision ?? 0)) return previous;
-      const next = {
-        ...previous,
-        matrices: previous.matrices.map((entry) =>
-          entry.id === id
-            ? {
-                id,
-                matrix,
-              }
-            : entry,
-        ),
-      };
-      catalogRef.current = next;
-      return next;
+    const previous = catalogRef.current;
+    if (!previous) return;
+    const warning = previous.errors.find((error) => error.id === id)?.error;
+    const next = applyCatalogEvent(previous, {
+      type: "vault",
+      id,
+      matrix,
+      error: warning,
     });
+    catalogRef.current = next;
+    setCatalog(next);
   }
   async function reviewConflict(row: VaultRow, operation: Operation) {
     setReviewBusy(true);
@@ -954,9 +1053,11 @@ export function VaultWorkspace({
   const addingMatrix = catalog?.matrices.find((m) => m.id === addEnvironment);
   const loadingLabel = !mutationToken
     ? "Connecting this browser…"
-    : catalog
-      ? "Refreshing secrets…"
-      : "Loading 1Password secrets…";
+    : progress
+      ? `Loading 1Password secrets… ${progress.completed} of ${progress.total} vaults complete`
+      : catalog
+        ? "Refreshing secrets…"
+        : "Loading 1Password secrets…";
   return (
     <div className="app vault-app">
       <header>
@@ -1119,7 +1220,9 @@ export function VaultWorkspace({
                 ? ` · ${env.account}`
                 : ""}
               <span className="filter-count">
-                {rows.filter((row) => row.vaultId === env.id).length}
+                {loadedVaults.has(env.id)
+                  ? rows.filter((row) => row.vaultId === env.id).length
+                  : "…"}
               </span>
             </Button>
           ))}
@@ -1197,7 +1300,9 @@ export function VaultWorkspace({
             <EyeIcon hidden={allVisible} />
           </Button>
           <Button
-            disabled={loading || saving || !catalog?.matrices.length}
+            disabled={
+              loading || readPending || saving || !catalog?.matrices.length
+            }
             onClick={() => {
               activePause.current?.();
               setAddEnvironment(
@@ -1276,6 +1381,14 @@ export function VaultWorkspace({
                 return;
               }
               if (
+                readPending &&
+                (event.key === "Enter" || event.key === "F2")
+              ) {
+                event.preventDefault();
+                event.preventGridDefault();
+                return;
+              }
+              if (
                 (event.key === "Enter" || event.key === "F2") &&
                 args.row &&
                 "variable" in args.row &&
@@ -1307,7 +1420,7 @@ export function VaultWorkspace({
             </span>
             <span>
               {catalog
-                ? `${filtered.length} of ${rows.length} secrets`
+                ? `${filtered.length} of ${rows.length} ${readPending ? "loaded " : ""}secrets`
                 : "Waiting for 1Password…"}
             </span>
             {selected.size ? (
@@ -1324,7 +1437,11 @@ export function VaultWorkspace({
                   variant="destructive"
                   size="sm"
                   disabled={
-                    deleting || selected.size > 200 || pending.current.size > 0
+                    loading ||
+                    readPending ||
+                    deleting ||
+                    selected.size > 200 ||
+                    pending.current.size > 0
                   }
                   onClick={() => {
                     setConfirmation("");
@@ -1346,7 +1463,7 @@ export function VaultWorkspace({
             )}
           </footer>
         </section>
-        {catalog && !filtered.length ? (
+        {catalog && !readPending && !filtered.length ? (
           <p role="status">
             {rows.length
               ? "No secrets match your search and environment filters."

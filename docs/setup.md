@@ -54,7 +54,14 @@ labels distinguish vaults with the same name. Search expands matching sections,
 and sorting applies inside groups. Switch to **No grouping** for the flat list.
 Group selection selects the matching secrets in that environment.
 
-Reads run two vaults at a time and use the existing 30-second server memory cache.
+All discovered vaults are queued immediately, with up to six reads in flight.
+Results stream into the grid as each vault finishes, without waiting for the
+slowest vault or a fixed batch. Progress shows completed/total vaults, and a
+pending filter count displays **…**. Search, grouping, and value visibility work
+with the partial results. Inline editing and bulk actions become available when
+the inventory finishes loading, so incoming rows cannot move an active edit.
+Initial vault metadata is reused rather than listed repeatedly during startup;
+Refresh re-lists accessible vaults. Reads use the existing 30-second server memory cache.
 An inaccessible vault reports an error while other environments remain available.
 Incompatible credentials are skipped with item-level diagnostics.
 Authenticated browser loads include values in memory for searching and editing.
@@ -497,7 +504,9 @@ If interrupted, `.local/ui-test-recovery.json` identifies only that test fixture
 drafts, and reviewed conflict recovery with a memory provider. CI runs this
 browser regression suite with Chromium. `npm run test:vault-features` covers
 grouping, duplicate environment names, local value search/visibility, and JSON
-editing in both modes; CI runs it too.
+editing in both modes; CI runs it too. `npm run test:vault-stream` verifies
+partial rendering and progress with a deliberately delayed vault; CI runs this
+suite as well.
 
 `npm run test:vaults` verifies discovery, vault isolation, search, inline editing,
 masking, empty vaults, creation, renaming, and deletion using a memory provider.

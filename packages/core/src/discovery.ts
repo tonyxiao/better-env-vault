@@ -71,13 +71,21 @@ export async function connectDiscovery(
     providers.push({ account, provider });
   }
   const owners = new Map<string, Provider>();
+  let initialVaults: VaultInfo[] | undefined;
   function owner(id: string) {
+    initialVaults = undefined;
     const provider = owners.get(id);
     if (!provider) throw new VaultError("Select an accessible vault.");
     return provider;
   }
   const discovered: Provider = {
+    takeInitialVaults() {
+      const vaults = initialVaults;
+      initialVaults = undefined;
+      return vaults;
+    },
     async listVaults(): Promise<VaultInfo[]> {
+      initialVaults = undefined;
       const vaults: VaultInfo[] = [];
       for (const { account, provider } of providers) {
         for (const vault of await provider.listVaults()) {
@@ -100,6 +108,6 @@ export async function connectDiscovery(
     restore: async (id: string, previous: VaultItem) =>
       owner(id).restore!(id, previous),
   };
-  await discovered.listVaults!();
+  initialVaults = await discovered.listVaults!();
   return discovered;
 }

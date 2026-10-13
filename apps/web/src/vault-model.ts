@@ -12,6 +12,53 @@ export interface VaultCatalog {
   errors: { id: string; name: string; error: string }[];
   auth: "desktop" | "service-account";
 }
+export type VaultCatalogEvent =
+  | {
+      type: "start";
+      environments: VaultEnvironment[];
+      auth: VaultCatalog["auth"];
+    }
+  | { type: "vault"; id: string; matrix: Matrix; error?: string }
+  | { type: "error"; id: string; error: string }
+  | { type: "complete" };
+
+export function applyCatalogEvent(
+  catalog: VaultCatalog,
+  event: VaultCatalogEvent,
+): VaultCatalog {
+  if (event.type === "start")
+    return {
+      environments: event.environments,
+      matrices: [],
+      errors: [],
+      auth: event.auth,
+    };
+  if (event.type === "complete") return catalog;
+  const environment = catalog.environments.find((env) => env.id === event.id);
+  if (!environment) throw new Error("Unknown environment in catalog stream.");
+  let matrices = catalog.matrices;
+  if (event.type === "vault") {
+    const current = matrices.find((entry) => entry.id === event.id)?.matrix;
+    if ((current?.revision ?? 0) > (event.matrix.revision ?? 0)) return catalog;
+    matrices = [
+      ...matrices.filter((entry) => entry.id !== event.id),
+      { id: event.id, matrix: event.matrix },
+    ];
+  }
+  const order = new Map(
+    catalog.environments.map((env, index) => [env.id, index]),
+  );
+  return {
+    ...catalog,
+    matrices: [...matrices].sort((a, b) => order.get(a.id)! - order.get(b.id)!),
+    errors: [
+      ...catalog.errors.filter((error) => error.id !== event.id),
+      ...(event.error
+        ? [{ id: event.id, name: environment.name, error: event.error }]
+        : []),
+    ].sort((a, b) => order.get(a.id)! - order.get(b.id)!),
+  };
+}
 export interface VaultRow {
   id: string;
   vaultId: string;

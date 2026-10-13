@@ -28,7 +28,8 @@
     "test:bulk-ui": "tsx scripts/test-bulk-ui.ts",
     "test:vaults": "tsx scripts/test-vaults.ts",
     "test:vault-saves": "tsx scripts/test-vault-saves.ts",
-    "test:vault-features": "tsx scripts/test-vault-features.ts"
+    "test:vault-features": "tsx scripts/test-vault-features.ts",
+    "test:vault-stream": "tsx scripts/test-vault-stream.ts"
   },
   "engines": {
     "node": ">=22"

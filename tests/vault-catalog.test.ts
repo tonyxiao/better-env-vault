@@ -254,7 +254,7 @@ it("returns verified save metadata and reuses the edited vault snapshot without 
     versions: matrix.versions.TOKEN,
   });
   expect(read).toHaveBeenCalledTimes(1);
-  expect(result.matrix.notes.TOKEN).toBe("updated");
+  expect(result.matrix.notes?.TOKEN).toBe("updated");
   expect(JSON.stringify(result)).not.toContain("private-dev");
   await browser.catalog();
   await browser.reveal(dev, {

@@ -21,9 +21,12 @@ import {
   publicResolution,
   type Resolution,
 } from "../../../packages/core/src/resolver.js";
+import type { Matrix } from "./matrix-model.js";
+import type { VaultCatalogEvent } from "./vault-model.js";
 import { SnapshotCache } from "./snapshot-cache.js";
 
 const environment = "vault";
+const concurrentVaults = 6;
 const name = z.string().regex(variableName);
 const value = z
   .string()
@@ -105,7 +108,8 @@ export class VaultBrowser {
       const provider = await this.provider();
       if (!provider.listVaults)
         throw new VaultError("Vault discovery is unavailable.");
-      const vaults = await provider.listVaults();
+      const vaults =
+        provider.takeInitialVaults?.() ?? (await provider.listVaults());
       this.vaults = new Map(vaults.map((v) => [v.id, v]));
       for (const id of this.inventories.keys())
         if (!this.vaults.has(id)) this.inventories.delete(id);
@@ -176,41 +180,27 @@ export class VaultBrowser {
       matrix: Awaited<ReturnType<VaultBrowser["matrix"]>>;
     }[] = [];
     const errors: { id: string; name: string; error: string }[] = [];
-    // Bound requests while reading every environment, including empty vaults.
-    for (let offset = 0; offset < environments.length; offset += 2) {
-      await Promise.all(
-        environments.slice(offset, offset + 2).map(async (env) => {
-          try {
-            const matrix = await this.matrix(
+    let next = 0;
+    await Promise.all(
+      Array.from(
+        { length: Math.min(concurrentVaults, environments.length) },
+        async () => {
+          while (next < environments.length) {
+            const env = environments[next++];
+            const event = await this.readEnvironment(
               env.id,
-              fingerprints !== undefined && Object.hasOwn(fingerprints, env.id),
-              fingerprints?.[env.id],
               fresh,
               includeValues,
+              fingerprints,
             );
-            matrices.push({ id: env.id, matrix });
-            const warnings = this.warnings.get(env.id) ?? [];
-            if (warnings.length)
-              errors.push({
-                id: env.id,
-                name: env.name,
-                error: `Some credentials were skipped. ${warnings.join(" ")} Review these items in 1Password.`,
-              });
-          } catch (error) {
-            if (
-              error instanceof VaultError &&
-              ["conflict", "authentication"].includes(error.code)
-            )
-              throw error;
-            errors.push({
-              id: env.id,
-              name: env.name,
-              error: safeError(error),
-            });
+            if (event.type === "vault")
+              matrices.push({ id: env.id, matrix: event.matrix });
+            if (event.error)
+              errors.push({ id: env.id, name: env.name, error: event.error });
           }
-        }),
-      );
-    }
+        },
+      ),
+    );
     const order = new Map(environments.map((env, index) => [env.id, index]));
     matrices.sort((a, b) => order.get(a.id)! - order.get(b.id)!);
     errors.sort((a, b) => order.get(a.id)! - order.get(b.id)!);
@@ -226,6 +216,96 @@ export class VaultBrowser {
           : "desktop"),
     };
   }
+  private async readEnvironment(
+    id: string,
+    fresh: boolean,
+    includeValues: boolean,
+    fingerprints?: Record<string, string>,
+  ): Promise<Extract<VaultCatalogEvent, { type: "vault" | "error" }>> {
+    try {
+      const matrix = await this.matrix(
+        id,
+        fingerprints !== undefined && Object.hasOwn(fingerprints, id),
+        fingerprints?.[id],
+        fresh,
+        includeValues,
+      );
+      const warnings = this.warnings.get(id) ?? [];
+      return {
+        type: "vault",
+        id,
+        matrix,
+        ...(warnings.length
+          ? {
+              error: `Some credentials were skipped. ${warnings.join(" ")} Review these items in 1Password.`,
+            }
+          : {}),
+      };
+    } catch (error) {
+      if (
+        error instanceof VaultError &&
+        ["conflict", "authentication"].includes(error.code)
+      )
+        throw error;
+      return { type: "error", id, error: safeError(error) };
+    }
+  }
+  async *catalogEvents(
+    fresh = false,
+    includeValues = false,
+    signal?: AbortSignal,
+  ): AsyncGenerator<VaultCatalogEvent> {
+    let abort!: () => void;
+    const cancelled = new Promise<never>((_, reject) => {
+      abort = () =>
+        reject(new DOMException("Catalog load cancelled.", "AbortError"));
+      if (signal?.aborted) abort();
+      else signal?.addEventListener("abort", abort, { once: true });
+    });
+    // Pending native SDK reads cannot be cancelled, but errors are always observed.
+    const active = new Map<
+      string,
+      Promise<{ id: string; event?: VaultCatalogEvent; error?: unknown }>
+    >();
+    try {
+      const environments = await Promise.race([this.projects(), cancelled]);
+      const auth =
+        this.options.auth ??
+        (this.options.serviceAccountKeychain ||
+        process.env.OP_SERVICE_ACCOUNT_TOKEN
+          ? "service-account"
+          : "desktop");
+      yield { type: "start", environments, auth };
+      let next = 0;
+      const schedule = () => {
+        while (
+          !signal?.aborted &&
+          active.size < concurrentVaults &&
+          next < environments.length
+        ) {
+          const id = environments[next++].id;
+          active.set(
+            id,
+            this.readEnvironment(id, fresh, includeValues).then(
+              (event) => ({ id, event }),
+              (error) => ({ id, error }),
+            ),
+          );
+        }
+      };
+      schedule();
+      while (active.size) {
+        const result = await Promise.race([...active.values(), cancelled]);
+        active.delete(result.id);
+        if (result.error) throw result.error;
+        schedule();
+        yield result.event!;
+      }
+      if (!signal?.aborted) yield { type: "complete" };
+    } finally {
+      signal?.removeEventListener("abort", abort);
+    }
+  }
   async matrix(
     id: string,
     reveal: boolean,
@@ -239,7 +319,11 @@ export class VaultBrowser {
     if (reveal && expected !== stamp) conflict();
     return this.matrixFromItems(id, items, reveal || includeValues);
   }
-  private matrixFromItems(id: string, items: VaultItem[], reveal: boolean) {
+  private matrixFromItems(
+    id: string,
+    items: VaultItem[],
+    reveal: boolean,
+  ): Matrix {
     const vault = this.vault(id);
     const stamp = identity(vault, items);
     const resolution: Resolution = {

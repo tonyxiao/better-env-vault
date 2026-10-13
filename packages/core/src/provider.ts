@@ -31,6 +31,7 @@ export interface VaultInfo {
 
 export interface Provider {
   listVaults?(): Promise<VaultInfo[]>;
+  takeInitialVaults?(): VaultInfo[] | undefined;
   diagnostics?(vaultId: string): string[];
   readVault(vaultId: string): Promise<VaultItem[]>;
   readItem?(vaultId: string, itemId: string): Promise<VaultItem>;
@@ -97,6 +98,12 @@ export function normalizeItems(
 
 export class OnePasswordProvider implements Provider {
   private allowed: Set<string>;
+  private initialVaults?: VaultInfo[];
+  takeInitialVaults() {
+    const vaults = this.initialVaults;
+    this.initialVaults = undefined;
+    return vaults;
+  }
   private warnings = new Map<string, string[]>();
   diagnostics(vaultId: string) {
     return this.warnings.get(vaultId) ?? [];
@@ -136,6 +143,9 @@ export class OnePasswordProvider implements Provider {
           throw new VaultError(
             "A configured vault is unavailable in the selected 1Password account.",
           );
+      provider.initialVaults = vaults
+        .filter((vault) => provider.allowed.has(vault.id))
+        .map((vault) => ({ id: vault.id, name: vault.title }));
       return provider;
     } catch (error) {
       throw error instanceof VaultError
@@ -148,6 +158,8 @@ export class OnePasswordProvider implements Provider {
     }
   }
   async listVaults(): Promise<VaultInfo[]> {
+    const initial = this.takeInitialVaults();
+    if (initial) return initial;
     const vaults = await this.call(() => this.client.vaults.list());
     if (this.discovery) this.allowed = new Set(vaults.map((v) => v.id));
     return vaults
@@ -155,6 +167,7 @@ export class OnePasswordProvider implements Provider {
       .map((vault) => ({ id: vault.id, name: vault.title }));
   }
   private check(vaultId: string) {
+    this.initialVaults = undefined;
     if (!this.allowed.has(vaultId))
       throw new VaultError("Vault is outside this project.");
   }

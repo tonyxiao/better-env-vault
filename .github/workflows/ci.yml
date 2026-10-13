@@ -21,3 +21,6 @@ jobs:
       - run: npm run test:vault-features
         env:
           PLAYWRIGHT_BROWSER: chromium
+      - run: npm run test:vault-stream
+        env:
+          PLAYWRIGHT_BROWSER: chromium

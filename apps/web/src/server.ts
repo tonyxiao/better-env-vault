@@ -3,6 +3,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
+import { once } from "node:events";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve, extname, dirname } from "node:path";
@@ -230,7 +231,57 @@ export async function startServer(options: {
         if (browser) {
           const id = url.searchParams.get("project") ?? "";
           try {
-            if (url.pathname === "/api/catalog" && request.method === "GET")
+            if (
+              url.pathname === "/api/catalog" &&
+              request.method === "GET" &&
+              url.searchParams.get("stream") === "1"
+            ) {
+              const controller = new AbortController();
+              const cancel = () => controller.abort();
+              response.on("close", cancel);
+              response.writeHead(200, {
+                "Content-Type": "application/x-ndjson; charset=utf-8",
+                "X-Accel-Buffering": "no",
+              });
+              response.flushHeaders();
+              try {
+                for await (const event of browser.catalogEvents(
+                  url.searchParams.get("fresh") === "1",
+                  url.searchParams.get("values") === "1",
+                  controller.signal,
+                )) {
+                  if (controller.signal.aborted) break;
+                  if (!response.write(JSON.stringify(event) + "\n"))
+                    await once(response, "drain", {
+                      signal: controller.signal,
+                    });
+                }
+              } catch (error) {
+                if (!controller.signal.aborted) {
+                  if (
+                    error instanceof VaultError &&
+                    ["authentication", "provider", "partial"].includes(
+                      error.code,
+                    )
+                  )
+                    browser.reset();
+                  response.write(
+                    JSON.stringify({
+                      type: "fatal",
+                      error: safeError(error),
+                      code:
+                        error instanceof VaultError ? error.code : undefined,
+                    }) + "\n",
+                  );
+                }
+              } finally {
+                response.off("close", cancel);
+                if (!response.destroyed) response.end();
+              }
+            } else if (
+              url.pathname === "/api/catalog" &&
+              request.method === "GET"
+            )
               json(
                 response,
                 200,
