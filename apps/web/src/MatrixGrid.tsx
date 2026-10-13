@@ -9,6 +9,7 @@ import {
   type RenderHeaderCellProps,
 } from "react-data-grid";
 import "react-data-grid/lib/styles.css";
+import { focusGridCell, useSearchShortcuts } from "./use-search-shortcuts.js";
 import { Info, LoaderCircle, RotateCcw } from "lucide-react";
 import { Button } from "./components/ui/button.js";
 import {
@@ -576,6 +577,13 @@ export function MatrixGrid(props: Props) {
       ),
     })),
   ];
+  useSearchShortcuts(
+    "search",
+    () => {
+      if (rows.length) focusGridCell(grid.current, { rowIdx: 0, idx: 2 });
+    },
+    () => activeEdit.current?.commit(),
+  );
   const rowHeight = 72;
   const height = Math.min(620, 56 + rows.length * rowHeight);
   return (

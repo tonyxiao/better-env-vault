@@ -580,6 +580,8 @@ function App() {
             </label>
             <Input
               id="search"
+              aria-keyshortcuts="Meta+K Control+K /"
+              title="Search (Cmd/Ctrl+K or /); Enter or ↓ returns to the grid"
               placeholder={
                 vaultMode
                   ? "Search variables…"

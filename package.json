@@ -30,7 +30,8 @@
     "test:vault-saves": "tsx scripts/test-vault-saves.ts",
     "test:vault-features": "tsx scripts/test-vault-features.ts",
     "test:vault-stream": "tsx scripts/test-vault-stream.ts",
-    "test:vault-notes": "tsx scripts/test-vault-notes.ts"
+    "test:vault-notes": "tsx scripts/test-vault-notes.ts",
+    "test:keyboard": "tsx scripts/test-keyboard.ts"
   },
   "engines": {
     "node": ">=22"

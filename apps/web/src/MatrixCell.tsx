@@ -85,6 +85,7 @@ export function SpreadsheetEditor({
   );
   const [shown, setShown] = useState(true);
   const [jsonOpen, setJsonOpen] = useState(false);
+  const [jsonMode, setJsonMode] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
   const notesSelection = useRef<{ start: number; end: number } | undefined>(
     undefined,
@@ -93,11 +94,38 @@ export function SpreadsheetEditor({
   useEffect(() => {
     if (loading || checkedJson.current) return;
     checkedJson.current = true;
-    if (multilineNotes && /[\r\n]/.test(value)) setNotesOpen(true);
-    else if (allowJson && isJsonContainer(value)) setJsonOpen(true);
+    if (allowJson && isJsonContainer(value)) {
+      setJsonOpen(true);
+      setJsonMode(true);
+    } else if (multilineNotes && /[\r\n]/.test(value)) setNotesOpen(true);
   }, [loading, allowJson, multilineNotes, value]);
   const initialHideEpoch = useRef(hideEpoch);
   const field = useRef<HTMLTextAreaElement>(null);
+  const returnToCell = useRef(false);
+  useLayoutEffect(() => {
+    if (jsonOpen || notesOpen || !returnToCell.current) return;
+    returnToCell.current = false;
+    field.current?.focus();
+    field.current?.setSelectionRange(
+      notesSelection.current?.start ?? value.length,
+      notesSelection.current?.end ?? value.length,
+    );
+  }, [jsonOpen, notesOpen, value]);
+  function expand() {
+    if (loading || failedLoad || !shown) return;
+    notesSelection.current = field.current
+      ? { start: field.current.selectionStart, end: field.current.selectionEnd }
+      : undefined;
+    if (jsonMode || (allowJson && isJsonContainer(value))) {
+      setJsonMode(true);
+      setJsonOpen(true);
+    } else setNotesOpen(true);
+  }
+  function collapse() {
+    returnToCell.current = true;
+    setJsonOpen(false);
+    setNotesOpen(false);
+  }
   const cancelButton = useRef<HTMLButtonElement>(null);
   const revealButton = useRef<HTMLButtonElement>(null);
   const load = useRef(onLoad),
@@ -134,7 +162,7 @@ export function SpreadsheetEditor({
   }, []);
   let saveValue = value,
     invalidJson = false;
-  if (jsonOpen) {
+  if (jsonMode) {
     try {
       saveValue = formatJson(value).compact;
     } catch {
@@ -183,6 +211,17 @@ export function SpreadsheetEditor({
       aria-label={`Edit ${variable.name} in ${environment}`}
       onSubmit={save}
       onKeyDown={(event) => {
+        if (event.nativeEvent.isComposing) return;
+        if (
+          event.key === "Enter" &&
+          event.shiftKey &&
+          (event.ctrlKey || event.metaKey)
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          expand();
+          return;
+        }
         if (event.key === "Escape") {
           event.preventDefault();
           event.stopPropagation();
@@ -231,7 +270,8 @@ export function SpreadsheetEditor({
     >
       {notesOpen && shown ? (
         <NotesEditor
-          label={inputLabel ?? `Notes for ${variable.name} in ${environment}`}
+          label={inputLabel ?? `${variable.name} value in ${environment}`}
+          kind={multilineNotes ? "notes" : "value"}
           value={value}
           selection={notesSelection.current}
           canSave={canSave}
@@ -243,6 +283,7 @@ export function SpreadsheetEditor({
             if (canSave) void onSave(value);
           }}
           onCancel={onCancel}
+          onCollapse={collapse}
         />
       ) : null}
       {jsonOpen && shown ? (
@@ -254,7 +295,11 @@ export function SpreadsheetEditor({
             void onSave(compact);
           }}
           onCancel={onCancel}
-          onPlainText={() => setJsonOpen(false)}
+          onCollapse={collapse}
+          onPlainText={() => {
+            setJsonMode(false);
+            collapse();
+          }}
         />
       ) : null}
       <div className="spreadsheet-control">
@@ -289,8 +334,9 @@ export function SpreadsheetEditor({
             wrap="off"
             autoComplete="off"
             spellCheck={false}
+            aria-keyshortcuts="Meta+Shift+Enter Control+Shift+Enter Escape"
             disabled={failedLoad}
-            title={`Enter saves and moves down; Tab saves and moves across; ${shiftEnterNewline ? "Shift+Enter or " : ""}Alt+Enter inserts a newline`}
+            title={`Enter saves and moves down; Tab saves and moves across; Ctrl/Cmd+Shift+Enter expands; Esc cancels; ${shiftEnterNewline ? "Shift+Enter or " : ""}Alt+Enter inserts a newline`}
           />
         ) : (
           <Button
@@ -318,17 +364,16 @@ export function SpreadsheetEditor({
             <span className="sr-only">Set an explicit empty value</span>
           </label>
         ) : null}
-        {multilineNotes && shown && !loading && !failedLoad ? (
+        {shown && !loading && !failedLoad ? (
           <Button
             type="button"
             variant="ghost"
             size="icon-xs"
-            aria-label="Expand notes editor"
-            title="Open a larger notes editor"
-            onClick={() => {
-              notesSelection.current = undefined;
-              setNotesOpen(true);
-            }}
+            aria-label={
+              multilineNotes ? "Expand notes editor" : "Expand value editor"
+            }
+            title="Expand editor (Ctrl/Cmd+Shift+Enter)"
+            onClick={expand}
           >
             <Maximize2 aria-hidden="true" />
           </Button>
@@ -340,7 +385,10 @@ export function SpreadsheetEditor({
             size="icon-xs"
             aria-label="Edit JSON"
             title="Edit as formatted JSON"
-            onClick={() => setJsonOpen(true)}
+            onClick={() => {
+              setJsonMode(true);
+              setJsonOpen(true);
+            }}
           >
             <Code aria-hidden="true" />
           </Button>
@@ -367,13 +415,13 @@ export function SpreadsheetEditor({
           <X aria-hidden="true" />
         </Button>
       </div>
-      {error ? (
+      {error || (invalidJson && !jsonOpen) ? (
         <span
           className="spreadsheet-caption inline-error"
           role="alert"
-          title={error}
+          title={error || "Invalid JSON. Expand the editor to fix it."}
         >
-          {error}
+          {error || "Invalid JSON. Expand the editor to fix it."}
         </span>
       ) : !compact ? (
         <span className="spreadsheet-caption origin">

@@ -15,6 +15,7 @@ export function JsonEditor({
   onSave,
   onCancel,
   onPlainText,
+  onCollapse,
 }: {
   initialValue: string;
   label: string;
@@ -22,6 +23,7 @@ export function JsonEditor({
   onSave: (compact: string) => void;
   onCancel: () => void;
   onPlainText: () => void;
+  onCollapse: () => void;
 }) {
   const [source, setSource] = useState(() => {
     try {
@@ -64,6 +66,18 @@ export function JsonEditor({
           event.preventDefault();
           input.current?.focus();
         }}
+        onCloseAutoFocus={(event) => event.preventDefault()}
+        onKeyDown={(event) => {
+          if (
+            event.key === "Enter" &&
+            event.shiftKey &&
+            (event.ctrlKey || event.metaKey)
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            onCollapse();
+          }
+        }}
       >
         <SheetTitle>{label}</SheetTitle>
         <SheetDescription>
@@ -96,7 +110,11 @@ export function JsonEditor({
               }
             }}
             onKeyDown={(event) => {
-              if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+              if (
+                event.key === "Enter" &&
+                !event.shiftKey &&
+                (event.ctrlKey || event.metaKey)
+              ) {
                 event.preventDefault();
                 event.stopPropagation();
                 save();
@@ -121,7 +139,8 @@ export function JsonEditor({
         ) : (
           <p className="text-muted-foreground text-sm">
             Enter adds a line · Tab indents · Shift+Tab moves focus ·
-            Ctrl/Cmd+Enter saves
+            Ctrl/Cmd+Enter saves · Ctrl/Cmd+Shift+Enter returns to cell · Esc
+            cancels
           </p>
         )}
         <div className="json-actions">
@@ -137,6 +156,9 @@ export function JsonEditor({
           </Button>
           <Button variant="outline" onClick={onCancel}>
             Cancel
+          </Button>
+          <Button variant="ghost" onClick={onCollapse}>
+            Back to cell
           </Button>
           <Button variant="ghost" onClick={onPlainText}>
             Use plain text

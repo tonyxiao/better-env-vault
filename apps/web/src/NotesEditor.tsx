@@ -16,6 +16,8 @@ export function NotesEditor({
   onChange,
   onSave,
   onCancel,
+  onCollapse,
+  kind = "notes",
 }: {
   label: string;
   value: string;
@@ -24,6 +26,8 @@ export function NotesEditor({
   onChange: (value: string) => void;
   onSave: () => void;
   onCancel: () => void;
+  onCollapse: () => void;
+  kind?: "notes" | "value";
 }) {
   const input = useRef<HTMLTextAreaElement>(null);
   return (
@@ -43,6 +47,18 @@ export function NotesEditor({
             selection?.end ?? value.length,
           );
         }}
+        onCloseAutoFocus={(event) => event.preventDefault()}
+        onKeyDown={(event) => {
+          if (
+            event.key === "Enter" &&
+            event.shiftKey &&
+            (event.ctrlKey || event.metaKey)
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            onCollapse();
+          }
+        }}
       >
         <SheetTitle>{label}</SheetTitle>
         <SheetDescription>
@@ -56,10 +72,14 @@ export function NotesEditor({
           rows={16}
           wrap="soft"
           autoComplete="off"
-          placeholder="Add notes…"
+          placeholder={kind === "notes" ? "Add notes…" : "Enter a value…"}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+            if (
+              event.key === "Enter" &&
+              !event.shiftKey &&
+              (event.ctrlKey || event.metaKey)
+            ) {
               event.preventDefault();
               event.stopPropagation();
               if (canSave) onSave();
@@ -67,14 +87,18 @@ export function NotesEditor({
           }}
         />
         <p className="text-muted-foreground text-sm">
-          Enter or Shift+Enter adds a line · Ctrl/Cmd+Enter saves · Esc cancels
+          Enter adds a line · Ctrl/Cmd+Enter saves · Ctrl/Cmd+Shift+Enter
+          returns to cell · Esc cancels
         </p>
         <div className="notes-actions">
           <Button disabled={!canSave} onClick={onSave}>
-            Save notes
+            Save {kind}
           </Button>
           <Button variant="outline" onClick={onCancel}>
             Cancel
+          </Button>
+          <Button variant="ghost" onClick={onCollapse}>
+            Back to cell
           </Button>
         </div>
       </SheetContent>

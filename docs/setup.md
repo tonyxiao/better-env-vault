@@ -101,6 +101,26 @@ previews show the first non-empty line and a line count. Notes-only saves
 preserve the credential value and opening notes never reveals that value.
 The details and creation forms also provide larger resizable notes fields.
 
+Keyboard shortcuts work in both the vault browser and schema matrix:
+
+| Shortcut                                | Action                                                          |
+| --------------------------------------- | --------------------------------------------------------------- |
+| Cmd/Ctrl+K, or `/` outside a text field | Focus search and select the current query                       |
+| Enter, ↓, or Esc in search              | Focus the first matching value cell (keeps the search filter)   |
+| Arrow keys                              | Move between grid cells                                         |
+| Enter or F2 on a value/notes cell       | Start editing                                                   |
+| Enter in a cell                         | Save and move down (Shift+Enter moves up in value cells)        |
+| Tab / Shift+Tab in a cell               | Save and move to the next / previous editable cell              |
+| Cmd/Ctrl+Enter                          | Save and exit editing in place                                  |
+| Cmd/Ctrl+Shift+Enter                    | Expand an editor, or return to the cell while keeping the draft |
+| Esc while editing                       | Cancel the edit and return focus to the grid                    |
+
+The expanded editor supports plain multiline values, notes, and formatted JSON.
+Enter adds a newline there. **Back to cell** also collapses it without saving;
+JSON validation and compact saves still apply after collapsing. Search shortcuts
+leave modal editors in control of focus. In the vault browser, jumping to search
+from an inline edit retains an unsaved draft for review.
+
 The grid supports keyboard navigation, inline editing, reveal/hide, adding
 variables, and confirmed single or bulk deletion. Each row edit, rename,
 or deletion affects only its own environment. Creating a secret asks which
@@ -398,8 +418,8 @@ Shift+Tab moves backward. Clicking another grid cell commits a changed draft.
 Ctrl/Cmd+Enter saves in place, Escape cancels, and Alt+Enter inserts a literal
 newline. Unchanged inherited/missing cells are never written just by navigating.
 Clearing a previously populated cell saves an explicit empty override if the
-schema permits it; an already empty cell needs explicit empty-value intent. Use the details drawer for larger
-values and notes. Public schema defaults also support inline edits.
+schema permits it; an already empty cell needs explicit empty-value intent. Use Cmd/Ctrl+Shift+Enter to expand larger
+values, then the same shortcut to return to the cell without saving. Public schema defaults also support inline edits.
 
 Saves run in the background with a spinner in the affected field. You can keep
 editing another field, search/filter, hide values, or switch projects while a

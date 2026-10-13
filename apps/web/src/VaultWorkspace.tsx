@@ -25,6 +25,7 @@ import {
   RotateCcw,
   Trash2,
 } from "lucide-react";
+import { focusGridCell, useSearchShortcuts } from "./use-search-shortcuts.js";
 import { Button } from "./components/ui/button.js";
 import type { Matrix } from "./matrix-model.js";
 import { Textarea } from "./components/ui/textarea.js";
@@ -108,12 +109,12 @@ function VaultValueEditor({
         pausing.current = true;
         commit?.();
         pausing.current = false;
-        onClose(false);
+        onClose(false, false);
       }),
     [register, row.id, field],
   );
   const submit = (value: string) => {
-    onClose(false);
+    onClose(false, !pausing.current);
     const payload = {
       action: "set",
       name: snapshot.variable.name,
@@ -1067,6 +1068,21 @@ export function VaultWorkspace({
       : catalog
         ? "Refreshing secrets…"
         : "Loading 1Password secrets…";
+  useSearchShortcuts(
+    "vault-search",
+    () => {
+      const rowIdx = visibleRows.findIndex((row) => "variable" in row);
+      if (rowIdx >= 0)
+        focusGridCell(grid.current, {
+          rowIdx,
+          idx: columns.findIndex((column) => column.key === "value"),
+        });
+      else if (visibleRows.length)
+        focusGridCell(grid.current, { rowIdx: 0, idx: 1 });
+    },
+    () => activePause.current?.(),
+  );
+
   return (
     <div className="app vault-app">
       <header>
@@ -1243,6 +1259,8 @@ export function VaultWorkspace({
             </label>
             <Input
               id="vault-search"
+              aria-keyshortcuts="Meta+K Control+K /"
+              title="Search (Cmd/Ctrl+K or /); Enter or ↓ returns to the grid"
               placeholder="Search names, values, environments, or notes…"
               value={search}
               onChange={(e) => {
@@ -1424,8 +1442,9 @@ export function VaultWorkspace({
             }}
           />
           <footer className="matrix-footer">
-            <span title="Enter saves; Tab saves and moves; Shift+Enter adds a line in Notes; Escape cancels">
-              Enter save · Tab move · Shift+Enter notes newline · Esc cancel
+            <span title="/ or Cmd/Ctrl+K searches; arrows navigate; Enter/F2 edits; Tab saves and moves; Cmd/Ctrl+Shift+Enter expands or collapses; Escape cancels">
+              ⌘/Ctrl+K search · Enter edit/save · Tab move · ⌘/Ctrl+Shift+Enter
+              expand · Esc cancel
             </span>
             <span>
               {catalog
