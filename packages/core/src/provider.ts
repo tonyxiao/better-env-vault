@@ -31,6 +31,7 @@ export interface VaultInfo {
 
 export interface Provider {
   listVaults?(): Promise<VaultInfo[]>;
+  diagnostics?(vaultId: string): string[];
   readVault(vaultId: string): Promise<VaultItem[]>;
   readItem?(vaultId: string, itemId: string): Promise<VaultItem>;
   save(
@@ -52,39 +53,54 @@ export interface Provider {
 export function normalizeItems(
   items: Item[],
   config: ProjectConfig,
+  onSkipped?: (message: string) => void,
 ): VaultItem[] {
-  const names = new Set<string>();
-  return items
-    .filter((item) => item.category === ItemCategory.ApiCredentials)
-    .map((item) => {
+  const counts = new Map<string, number>();
+  for (const item of items.filter(
+    (item) => item.category === ItemCategory.ApiCredentials,
+  ))
+    counts.set(item.title, (counts.get(item.title) ?? 0) + 1);
+  const normalized: VaultItem[] = [];
+  for (const item of items.filter(
+    (item) => item.category === ItemCategory.ApiCredentials,
+  )) {
+    try {
       if (!variableName.test(item.title))
         throw new VaultError(
-          "An API Credential item has an invalid variable name.",
+          `An API Credential item has an invalid variable name: ${item.title}.`,
         );
-      if (names.has(item.title))
+      if (counts.get(item.title)! > 1)
         throw new VaultError(
           `Duplicate API Credential items for ${item.title}.`,
         );
-      names.add(item.title);
       const fieldId = config.legacyFields?.[item.title] ?? "credential";
       const fields = item.fields.filter((field) => field.id === fieldId);
       if (fields.length !== 1)
         throw new VaultError(
           `Missing or ambiguous credential field for ${item.title}.`,
         );
-      return {
+      normalized.push({
         id: item.id,
         version: item.version,
         name: item.title,
         value: fields[0].value,
         notes: item.notes,
         raw: item,
-      };
-    });
+      });
+    } catch (error) {
+      if (!onSkipped) throw error;
+      onSkipped((error as Error).message);
+    }
+  }
+  return normalized;
 }
 
 export class OnePasswordProvider implements Provider {
   private allowed: Set<string>;
+  private warnings = new Map<string, string[]>();
+  diagnostics(vaultId: string) {
+    return this.warnings.get(vaultId) ?? [];
+  }
   constructor(
     public client: Client,
     private config: ProjectConfig,
@@ -209,7 +225,14 @@ export class OnePasswordProvider implements Provider {
           items.push(response.content);
         }
       }
-      return normalizeItems(items, this.config);
+      const warnings: string[] = [];
+      const normalized = normalizeItems(
+        items,
+        this.config,
+        this.discovery ? (message) => warnings.push(message) : undefined,
+      );
+      this.warnings.set(vaultId, warnings);
+      return normalized;
     });
   }
   async readItem(vaultId: string, itemId: string): Promise<VaultItem> {
@@ -266,8 +289,18 @@ export class OnePasswordProvider implements Provider {
           throw new VaultError(
             "Remove the legacy field mapping before creating a new credential item for this variable.",
           );
-        const existing = await this.readVault(vaultId);
-        if (existing.some((i) => i.name === name)) conflict();
+        // Discovery may skip malformed/duplicate credentials in the editor,
+        // but an existing title must still block creating another duplicate.
+        const existing = await this.client.items.list(vaultId);
+        if (
+          existing.some(
+            (i) =>
+              i.category === ItemCategory.ApiCredentials &&
+              i.state === ItemState.Active &&
+              i.title === name,
+          )
+        )
+          conflict();
         result = await this.client.items.create({
           vaultId,
           title: name,
@@ -324,6 +357,19 @@ export class OnePasswordProvider implements Provider {
       throw new VaultError("Invalid variable name.");
     return this.call(async () => {
       const item = await this.fresh(vaultId, previous);
+      if (this.discovery) {
+        const existing = await this.client.items.list(vaultId);
+        if (
+          existing.some(
+            (i) =>
+              i.id !== previous.id &&
+              i.category === ItemCategory.ApiCredentials &&
+              i.state === ItemState.Active &&
+              i.title === name,
+          )
+        )
+          conflict();
+      }
       item.title = name;
       const updated = await this.client.items.put(item);
       try {

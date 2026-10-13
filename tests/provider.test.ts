@@ -167,3 +167,65 @@ it("reads a selected credential through one SDK item request and verifies its sc
   item.vaultId = "wrong-vault";
   await expect(provider.readItem(vault, item.id)).rejects.toThrow("unexpected");
 });
+
+it("skips incompatible discovery credentials while preserving strict schema validation", async () => {
+  const { client, item } = fixture();
+  const incompatible = { ...item, id: "bad-id", title: "Human readable name" };
+  client.items.list.mockResolvedValue([
+    { ...item, state: ItemState.Active },
+    { ...incompatible, state: ItemState.Active },
+  ]);
+  client.items.getAll.mockResolvedValue({
+    individualResponses: [{ content: item }, { content: incompatible }],
+  });
+  const discovery = new OnePasswordProvider(
+    client as unknown as Client,
+    config,
+    true,
+  );
+  expect(await discovery.readVault(vault)).toHaveLength(1);
+  expect(discovery.diagnostics(vault)[0]).toContain("Human readable name");
+  const strict = new OnePasswordProvider(client as unknown as Client, config);
+  await expect(strict.readVault(vault)).rejects.toThrow(
+    "invalid variable name",
+  );
+});
+
+it("does not create another credential when discovery hides duplicate titles", async () => {
+  const { client, item } = fixture();
+  const duplicate = { ...item, id: "duplicate-id" };
+  client.items.list.mockResolvedValue([
+    { ...item, state: ItemState.Active },
+    { ...duplicate, state: ItemState.Active },
+  ]);
+  client.items.getAll.mockResolvedValue({
+    individualResponses: [{ content: item }, { content: duplicate }],
+  });
+  const provider = new OnePasswordProvider(
+    client as unknown as Client,
+    config,
+    true,
+  );
+  expect(await provider.readVault(vault)).toEqual([]);
+  await expect(provider.save(vault, "KEY", "new", "")).rejects.toThrow(
+    "changed",
+  );
+  expect(client.items.create).not.toHaveBeenCalled();
+});
+
+it("rejects renaming to a title belonging to a skipped credential", async () => {
+  const { client, item } = fixture();
+  const provider = new OnePasswordProvider(
+    client as unknown as Client,
+    config,
+    true,
+  );
+  const previous = (await provider.readVault(vault))[0];
+  client.items.list.mockResolvedValueOnce([
+    { ...item, id: "bad-target", title: "TARGET", state: ItemState.Active },
+  ]);
+  await expect(provider.rename(vault, previous, "TARGET")).rejects.toThrow(
+    "changed",
+  );
+  expect(client.items.put).not.toHaveBeenCalled();
+});

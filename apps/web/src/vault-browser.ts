@@ -31,6 +31,7 @@ const value = z
   .refine((s) => !s.includes("\0"));
 const common = {
   fingerprint: z.string(),
+  reveal: z.boolean().optional(),
   name,
   versions: z.strictObject({ vault: z.number().int().nullable() }),
 };
@@ -87,6 +88,8 @@ export class VaultBrowser {
     { fingerprint: string; items: Map<string, { id: string; version: number }> }
   >();
   private reveals = new SnapshotCache<VaultItem>();
+  private revisions = new Map<string, number>();
+  private warnings = new Map<string, string[]>();
   private queues = new Map<string, Promise<unknown>>();
   constructor(
     private options: DiscoveryOptions,
@@ -134,15 +137,20 @@ export class VaultBrowser {
       id,
       id,
       async () => {
-        const items = await provider.readVault(id);
-        const names = new Set<string>();
-        for (const item of items) {
-          if (!variableName.test(item.name) || names.has(item.name))
-            throw new VaultError(
-              "This vault contains invalid or duplicate API Credential names. Review them in 1Password.",
-            );
-          names.add(item.name);
-        }
+        const read = await provider.readVault(id);
+        const counts = new Map<string, number>();
+        for (const item of read)
+          counts.set(item.name, (counts.get(item.name) ?? 0) + 1);
+        const warnings = [...(provider.diagnostics?.(id) ?? [])];
+        const items = read.filter((item) => {
+          if (variableName.test(item.name) && counts.get(item.name) === 1)
+            return true;
+          warnings.push(
+            `Skipped API Credential ${item.name}: invalid or duplicate variable name.`,
+          );
+          return false;
+        });
+        this.warnings.set(id, [...new Set(warnings)]);
         this.inventories.set(id, {
           fingerprint: identity(this.vault(id), items),
           items: new Map(
@@ -169,16 +177,20 @@ export class VaultBrowser {
       await Promise.all(
         environments.slice(offset, offset + 2).map(async (env) => {
           try {
-            matrices.push({
-              id: env.id,
-              matrix: await this.matrix(
-                env.id,
-                fingerprints !== undefined &&
-                  Object.hasOwn(fingerprints, env.id),
-                fingerprints?.[env.id],
-                fresh,
-              ),
-            });
+            const matrix = await this.matrix(
+              env.id,
+              fingerprints !== undefined && Object.hasOwn(fingerprints, env.id),
+              fingerprints?.[env.id],
+              fresh,
+            );
+            matrices.push({ id: env.id, matrix });
+            const warnings = this.warnings.get(env.id) ?? [];
+            if (warnings.length)
+              errors.push({
+                id: env.id,
+                name: env.name,
+                error: `Some credentials were skipped. ${warnings.join(" ")} Review these items in 1Password.`,
+              });
           } catch (error) {
             if (
               error instanceof VaultError &&
@@ -194,6 +206,9 @@ export class VaultBrowser {
         }),
       );
     }
+    const order = new Map(environments.map((env, index) => [env.id, index]));
+    matrices.sort((a, b) => order.get(a.id)! - order.get(b.id)!);
+    errors.sort((a, b) => order.get(a.id)! - order.get(b.id)!);
     return {
       environments,
       matrices,
@@ -211,6 +226,11 @@ export class VaultBrowser {
     const items = await this.items(id, fresh);
     const stamp = identity(vault, items);
     if (reveal && expected !== stamp) conflict();
+    return this.matrixFromItems(id, items, reveal);
+  }
+  private matrixFromItems(id: string, items: VaultItem[], reveal: boolean) {
+    const vault = this.vault(id);
+    const stamp = identity(vault, items);
     const resolution: Resolution = {
       environment,
       chain: [],
@@ -237,6 +257,7 @@ export class VaultBrowser {
     };
     return {
       mode: "vault",
+      revision: this.revisions.get(id) ?? 0,
       fingerprint: stamp,
       config: {
         version: 1,
@@ -316,17 +337,29 @@ export class VaultBrowser {
       notes: item.notes,
     };
   }
-  private async serialize<T>(id: string, work: () => Promise<T>) {
+  private async serialize<T>(
+    id: string,
+    work: () => Promise<T>,
+    preserveSnapshot = false,
+  ) {
     this.vault(id);
     const previous = this.queues.get(id) ?? Promise.resolve();
     const pending = previous.catch(() => {}).then(work);
     this.queues.set(id, pending);
+    let succeeded = false;
     try {
-      return await pending;
+      const result = await pending;
+      succeeded = true;
+      return result;
     } finally {
-      this.snapshots.invalidate(id);
-      this.inventories.delete(id);
-      this.reveals.clear();
+      // Invalidate item reveals before discarding their inventory.
+      for (const entry of this.inventories.get(id)?.items.values() ?? [])
+        this.reveals.invalidate(JSON.stringify([id, entry.id]));
+      if (!succeeded || !preserveSnapshot) {
+        this.snapshots.invalidate(id);
+        this.inventories.delete(id);
+      }
+
       if (this.queues.get(id) === pending) this.queues.delete(id);
     }
   }
@@ -337,43 +370,70 @@ export class VaultBrowser {
         "Invalid vault edit. Schema operations are unavailable in vault mode.",
       );
     const data = parsed.data;
-    return this.serialize(id, async () => {
-      const items = await this.items(id, true);
-      if (data.fingerprint !== identity(this.vault(id), items)) conflict();
-      const item = items.find((i) => i.name === data.name);
-      if ((item?.version ?? null) !== data.versions.vault) conflict();
-      const provider = await this.provider();
-      if (data.action === "add") {
-        if (item) conflict();
-        await provider.save(
-          id,
-          data.name,
-          data.initialValues.vault.value,
-          data.initialValues.vault.notes ?? "",
-        );
-      } else {
-        if (!item) conflict();
-        if (data.action === "set")
-          await provider.save(
-            id,
-            item.name,
-            data.value ?? item.value,
-            data.notes ?? item.notes,
-            item,
+    return this.serialize(
+      id,
+      async () => {
+        const items = [...(await this.items(id, true))];
+        if (data.fingerprint !== identity(this.vault(id), items)) conflict();
+        const item = items.find((i) => i.name === data.name);
+        if ((item?.version ?? null) !== data.versions.vault) conflict();
+        const provider = await this.provider();
+        if (data.action === "add") {
+          if (item) conflict();
+          items.push(
+            await provider.save(
+              id,
+              data.name,
+              data.initialValues.vault.value,
+              data.initialValues.vault.notes ?? "",
+            ),
           );
-        if (data.action === "rename") {
-          if (items.some((i) => i.name === data.newName && i.id !== item.id))
-            conflict();
-          await provider.rename(id, item, data.newName);
+        } else {
+          if (!item) conflict();
+          if (data.action === "set")
+            items[items.indexOf(item)] = await provider.save(
+              id,
+              item.name,
+              data.value ?? item.value,
+              data.notes ?? item.notes,
+              item,
+            );
+          if (data.action === "rename") {
+            if (items.some((i) => i.name === data.newName && i.id !== item.id))
+              conflict();
+            items[items.indexOf(item)] = await provider.rename(
+              id,
+              item,
+              data.newName,
+            );
+          }
+          if (data.action === "delete") {
+            if (data.confirmation !== item.name)
+              throw new VaultError(
+                "Type the variable name to confirm deletion.",
+              );
+            await provider.remove(id, item);
+            items.splice(items.indexOf(item), 1);
+          }
         }
-        if (data.action === "delete") {
-          if (data.confirmation !== item.name)
-            throw new VaultError("Type the variable name to confirm deletion.");
-          await provider.remove(id, item);
-        }
-      }
-      return { saved: true };
-    });
+        await this.snapshots.get(id, id, async () => items, true);
+        this.inventories.set(id, {
+          fingerprint: identity(this.vault(id), items),
+          items: new Map(
+            items.map((item) => [
+              item.name,
+              { id: item.id, version: item.version },
+            ]),
+          ),
+        });
+        this.revisions.set(id, (this.revisions.get(id) ?? 0) + 1);
+        return {
+          saved: true,
+          matrix: this.matrixFromItems(id, items, data.reveal === true),
+        };
+      },
+      true,
+    );
   }
   async deleteMany(id: string, input: unknown) {
     const parsed = deleteRequest.safeParse(input);
@@ -431,5 +491,6 @@ export class VaultBrowser {
     this.snapshots.clear();
     this.inventories.clear();
     this.reveals.clear();
+    this.warnings.clear();
   }
 }

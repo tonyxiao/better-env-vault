@@ -23,6 +23,8 @@ import {
   Trash2,
 } from "lucide-react";
 import { Button } from "./components/ui/button.js";
+import type { Matrix } from "./matrix-model.js";
+import { Textarea } from "./components/ui/textarea.js";
 import { Input } from "./components/ui/input.js";
 import {
   NativeSelect,
@@ -57,6 +59,7 @@ interface Operation {
   payload: Record<string, unknown>;
   status: "saving" | "error";
   error?: string;
+  code?: string;
   field: "value" | "notes";
 }
 function VaultValueEditor({
@@ -73,6 +76,8 @@ function VaultValueEditor({
   reveal,
   register,
   navigate,
+  retainDraft,
+  draftValue,
 }: RenderEditCellProps<VaultRow> & {
   field?: "value" | "notes";
   hideEpoch: number;
@@ -81,7 +86,14 @@ function VaultValueEditor({
   cachedValue?: RevealedVaultValue;
   save: (row: VaultRow, payload: Record<string, unknown>) => Promise<boolean>;
   reveal: (row: VaultRow) => Promise<{ editableValue?: string }>;
-  register: (id: string, field: string, commit?: () => void) => void;
+  register: (
+    id: string,
+    field: string,
+    commit?: () => void,
+    pause?: () => void,
+  ) => void;
+  retainDraft: (row: VaultRow, payload: Record<string, unknown>) => void;
+  draftValue?: string;
   navigate: (
     rowIdx: number,
     columnIdx: number,
@@ -89,20 +101,32 @@ function VaultValueEditor({
   ) => void;
 }) {
   const snapshot = useRef(row).current;
+  const pausing = useRef(false);
   const onCommitReady = useCallback(
-    (commit?: () => void) => register(row.id, field, commit),
+    (commit?: () => void) =>
+      register(row.id, field, commit, () => {
+        pausing.current = true;
+        commit?.();
+        pausing.current = false;
+        onClose(false);
+      }),
     [register, row.id, field],
   );
   const submit = (value: string) => {
     onClose(false);
-    return save(snapshot, {
+    const payload = {
       action: "set",
       name: snapshot.variable.name,
       environment: "vault",
       [field]: value,
       fingerprint: snapshot.matrix.fingerprint,
       versions: snapshot.matrix.versions[snapshot.variable.name],
-    });
+    };
+    if (pausing.current) {
+      retainDraft(snapshot, payload);
+      return Promise.resolve(true);
+    }
+    return save(snapshot, payload);
   };
   return (
     <SpreadsheetEditor
@@ -133,7 +157,7 @@ function VaultValueEditor({
         operation?.status === "error" &&
         typeof operation.payload[field] === "string"
           ? (operation.payload[field] as string)
-          : undefined
+          : draftValue
       }
       onLoad={() =>
         field === "notes"
@@ -185,6 +209,40 @@ export function VaultWorkspace({
   const alive = useRef(true);
   const [operations, setOperations] = useState<Record<string, Operation>>({});
   const pending = useRef(new Set<string>());
+  const [drafts, setDrafts] = useState<
+    Record<
+      string,
+      {
+        row: VaultRow;
+        payload: Record<string, unknown>;
+        field: "value" | "notes";
+      }
+    >
+  >({});
+  function retainDraft(row: VaultRow, payload: Record<string, unknown>) {
+    setDrafts((previous) => {
+      const next = { ...previous };
+      const { value: _value, notes: _notes, ...metadata } = payload;
+      for (const field of ["value", "notes"] as const) {
+        if (typeof payload[field] === "string")
+          next[JSON.stringify([row.id, field])] = {
+            row,
+            field,
+            payload: { ...metadata, [field]: payload[field] },
+          };
+      }
+      return next;
+    });
+  }
+
+  const [review, setReview] = useState<{
+    row: VaultRow;
+    operation: Operation;
+    draft: string;
+    latest?: string;
+  }>();
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const saving = Object.values(operations).some((op) => op.status === "saving");
   const [details, setDetails] = useState<{
     row: VaultRow;
     trigger: HTMLElement;
@@ -209,11 +267,13 @@ export function VaultWorkspace({
     return () => media.removeEventListener("change", update);
   }, []);
   const activeCommit = useRef<(() => void) | undefined>(undefined);
+  const activePause = useRef<(() => void) | undefined>(undefined);
   const activeRow = useRef<string | undefined>(undefined);
   const activeField = useRef<string | undefined>(undefined);
   const register = useCallback(
-    (id: string, field: string, commit?: () => void) => {
+    (id: string, field: string, commit?: () => void, pause?: () => void) => {
       activeCommit.current = commit;
+      activePause.current = commit ? pause : undefined;
       activeRow.current = commit ? id : undefined;
       activeField.current = commit ? field : undefined;
     },
@@ -354,12 +414,76 @@ export function VaultWorkspace({
       }
     });
   }
+  function patchMatrix(id: string, matrix: Matrix, generation: number) {
+    ++loadId.current;
+    setLoading(false);
+    setReadPending(false);
+    setCatalog((previous) => {
+      if (!previous) return previous;
+      const current = previous.matrices.find(
+        (entry) => entry.id === id,
+      )?.matrix;
+      if ((current?.revision ?? 0) > (matrix.revision ?? 0)) return previous;
+      const next = {
+        ...previous,
+        matrices: previous.matrices.map((entry) =>
+          entry.id === id
+            ? {
+                id,
+                matrix:
+                  visibleIntent.current && generation === visibility.current
+                    ? matrix
+                    : maskCatalog({ ...previous, matrices: [{ id, matrix }] })
+                        .matrices[0].matrix,
+              }
+            : entry,
+        ),
+      };
+      catalogRef.current = maskCatalog(next);
+      valueCache.current.reconcile(catalogRows(next));
+      return next;
+    });
+  }
+  async function reviewConflict(row: VaultRow, operation: Operation) {
+    setReviewBusy(true);
+    setError("");
+    try {
+      const matrix = await api<Matrix>(
+        `/api/matrix?project=${encodeURIComponent(row.vaultId)}&fresh=1`,
+      );
+      // A conflict refresh masks this environment until values are explicitly revealed again.
+      hide();
+      patchMatrix(row.vaultId, matrix, visibility.current);
+      const freshRow = catalogRows({
+        environments: [row.environment],
+        matrices: [{ id: row.vaultId, matrix }],
+        errors: [],
+        auth: "desktop",
+      }).find((candidate) => candidate.id === row.id);
+      if (!freshRow)
+        throw new Error(
+          "This secret was deleted. Your draft is retained in the save error; copy it before discarding.",
+        );
+      setReview({
+        row: freshRow,
+        operation,
+        draft: String(operation.payload[operation.field] ?? ""),
+        latest: operation.field === "notes" ? freshRow.notes : undefined,
+      });
+    } catch (error) {
+      setError((error as Error).message);
+    } finally {
+      setReviewBusy(false);
+    }
+  }
   async function save(
     row: Omit<VaultRow, "variable"> & {
       variable: Pick<VaultRow["variable"], "name">;
     },
     payload: Record<string, unknown>,
   ) {
+    const draftRow = rows.find((candidate) => candidate.id === row.id);
+    if (draftRow && payload.action === "set") retainDraft(draftRow, payload);
     if (pending.current.has(row.id)) return false;
     valueCache.current.invalidate(row.id);
     pending.current.add(row.id);
@@ -375,18 +499,37 @@ export function VaultWorkspace({
       },
     }));
     setNotice("");
+    const generation = visibility.current;
     try {
-      await api(`/api/edit?project=${encodeURIComponent(row.vaultId)}`, {
-        fingerprint: row.matrix.fingerprint,
-        ...payload,
-      });
+      const result = await api<{ matrix: Matrix }>(
+        `/api/edit?project=${encodeURIComponent(row.vaultId)}`,
+        {
+          fingerprint: row.matrix.fingerprint,
+          ...payload,
+          reveal: visibleIntent.current,
+        },
+      );
       if (!alive.current) return true;
+      patchMatrix(row.vaultId, result.matrix, generation);
+      // Clear the guard before making the row editable; no async refresh window.
+      pending.current.delete(row.id);
+      setDrafts((previous) => {
+        const next = { ...previous };
+        for (const field of ["value", "notes"] as const) {
+          const key = JSON.stringify([row.id, field]);
+          if (
+            typeof payload[field] === "string" &&
+            next[key]?.payload[field] === payload[field]
+          )
+            delete next[key];
+        }
+        return next;
+      });
       setOperations((previous) => {
         const next = { ...previous };
         delete next[row.id];
         return next;
       });
-      await load(false, true);
       if (alive.current)
         setNotice(
           `Saved ${payload.notes !== undefined && payload.value === undefined ? "notes for " : ""}${row.variable.name} in ${row.environment.name}.`,
@@ -404,6 +547,7 @@ export function VaultWorkspace({
                 ? "notes"
                 : "value",
             error: (error as Error).message,
+            code: error instanceof RequestError ? error.code : undefined,
           },
         }));
       return false;
@@ -458,32 +602,33 @@ export function VaultWorkspace({
   ) {
     let nextRow = rowIdx,
       nextColumn = columnIdx;
-    for (let attempt = 0; attempt < filtered.length * 2; attempt++) {
-      if (direction === "up" || direction === "down")
-        nextRow += direction === "up" ? -1 : 1;
-      else if (direction === "next") {
-        if (nextColumn === 3) nextColumn = 4;
-        else {
-          nextColumn = 3;
-          nextRow++;
-        }
-      } else {
-        if (nextColumn === 4) nextColumn = 3;
-        else {
-          nextColumn = 4;
-          nextRow--;
-        }
+    const valueColumn = columns.findIndex((column) => column.key === "value");
+    const notesColumn = columns.findIndex((column) => column.key === "notes");
+    if (direction === "up" || direction === "down")
+      nextRow += direction === "up" ? -1 : 1;
+    else if (direction === "next") {
+      if (nextColumn === valueColumn) nextColumn = notesColumn;
+      else {
+        nextColumn = valueColumn;
+        nextRow++;
       }
-      if (nextRow < 0 || nextRow >= filtered.length) return;
-      if (!pending.current.has(filtered[nextRow].id)) {
-        grid.current?.setActivePosition(
-          { rowIdx: nextRow, idx: nextColumn },
-          { enableEditor: true },
-        );
-        return;
+    } else {
+      if (nextColumn === notesColumn) nextColumn = valueColumn;
+      else {
+        nextColumn = notesColumn;
+        nextRow--;
       }
     }
+    if (nextRow < 0 || nextRow >= filtered.length) return;
+    // Keep the destination predictable even when that item is still saving.
+    grid.current?.setActivePosition(
+      { rowIdx: nextRow, idx: nextColumn },
+      {
+        enableEditor: !pending.current.has(filtered[nextRow].id),
+      },
+    );
   }
+
   async function deleteSelected() {
     if (!deleteRows || confirmation !== "DELETE" || deleting) return;
     const batch = deleteRows;
@@ -555,7 +700,10 @@ export function VaultWorkspace({
           >
             {row.environment.name}
           </strong>
-          {row.environment.account ? (
+          {row.environment.account &&
+          catalog?.environments.filter(
+            (env) => env.name === row.environment.name,
+          ).length! > 1 ? (
             <span>{row.environment.account}</span>
           ) : null}
         </div>
@@ -565,17 +713,26 @@ export function VaultWorkspace({
       key: "value",
       name: "Value",
       sortable: allVisible,
-      minWidth: 260,
-      width: Math.max(
-        260,
-        gridWidth -
-          36 -
-          (resizedWidths.name ?? (freezeNames ? 300 : 220)) -
-          (resizedWidths.environment ?? 170) -
-          (resizedWidths.notes ?? 280),
-      ),
+      minWidth: allVisible ? 260 : 160,
+      resizable: true,
+      width:
+        resizedWidths.value ??
+        (allVisible
+          ? Math.max(
+              260,
+              gridWidth -
+                36 -
+                (resizedWidths.name ?? (freezeNames ? 300 : 220)) -
+                (resizedWidths.environment ?? 170) -
+                (resizedWidths.notes ?? 280),
+            )
+          : 160),
       cellClass: "environment-value-cell",
-      editable: (row) => !deleting && operations[row.id]?.status !== "saving",
+      editable: (row) =>
+        !loading &&
+        !readPending &&
+        !deleting &&
+        operations[row.id]?.status !== "saving",
       editorOptions: {
         commitOnOutsideClick: false,
         closeOnExternalRowChange: false,
@@ -594,6 +751,12 @@ export function VaultWorkspace({
           save={save}
           reveal={reveal}
           register={register}
+          retainDraft={retainDraft}
+          draftValue={
+            drafts[JSON.stringify([props.row.id, "value"])]?.payload.value as
+              | string
+              | undefined
+          }
           navigate={navigate}
         />
       ),
@@ -618,7 +781,13 @@ export function VaultWorkspace({
               className="value-cell explicit"
               tabIndex={-1}
               aria-label={`Edit ${row.variable.name} in ${row.environment.name}`}
-              disabled={deleting || operations[row.id]?.status === "saving"}
+              title={operation?.error}
+              disabled={
+                loading ||
+                readPending ||
+                deleting ||
+                operations[row.id]?.status === "saving"
+              }
               onClick={() =>
                 grid.current?.setActivePosition(
                   { rowIdx, idx: column.idx },
@@ -632,12 +801,6 @@ export function VaultWorkspace({
                     ? "(empty)"
                     : (shown ?? "••••••••")
                   : "••••••••"}
-              </span>
-              <span
-                className={`origin ${operation?.status === "error" ? "field-error-message" : ""}`}
-                role={operation?.status === "error" ? "alert" : undefined}
-              >
-                {operation?.error ?? ""}
               </span>
             </Button>
             {operation?.status === "saving" ? (
@@ -670,8 +833,12 @@ export function VaultWorkspace({
                 variant="ghost"
                 size="icon-xs"
                 className="cell-retry"
-                aria-label={`Retry saving ${row.variable.name} in ${row.environment.name}`}
-                onClick={() => void save(row, operation.payload)}
+                aria-label={`${operation.code === "conflict" ? "Review draft for" : "Retry saving"} ${row.variable.name} in ${row.environment.name}`}
+                onClick={() =>
+                  void (operation.code === "conflict"
+                    ? reviewConflict(row, operation)
+                    : save(row, operation.payload))
+                }
               >
                 <RotateCcw />
               </Button>
@@ -685,10 +852,25 @@ export function VaultWorkspace({
       name: "Notes",
       sortable: true,
       minWidth: 180,
-      width: resizedWidths.notes ?? 280,
+      width:
+        resizedWidths.notes ??
+        (allVisible
+          ? 280
+          : Math.max(
+              280,
+              gridWidth -
+                36 -
+                (resizedWidths.name ?? (freezeNames ? 300 : 220)) -
+                (resizedWidths.environment ?? 170) -
+                (resizedWidths.value ?? 160),
+            )),
       resizable: true,
       cellClass: "environment-value-cell notes-value-cell",
-      editable: (row) => !deleting && operations[row.id]?.status !== "saving",
+      editable: (row) =>
+        !loading &&
+        !readPending &&
+        !deleting &&
+        operations[row.id]?.status !== "saving",
       editorOptions: {
         commitOnOutsideClick: false,
         closeOnExternalRowChange: false,
@@ -707,6 +889,12 @@ export function VaultWorkspace({
           save={save}
           reveal={reveal}
           register={register}
+          retainDraft={retainDraft}
+          draftValue={
+            drafts[JSON.stringify([props.row.id, "notes"])]?.payload.notes as
+              | string
+              | undefined
+          }
           navigate={navigate}
         />
       ),
@@ -729,9 +917,14 @@ export function VaultWorkspace({
               variant="ghost"
               className="value-cell notes-cell"
               tabIndex={-1}
-              disabled={deleting || operations[row.id]?.status === "saving"}
+              disabled={
+                loading ||
+                readPending ||
+                deleting ||
+                operations[row.id]?.status === "saving"
+              }
               aria-label={`Edit notes for ${row.variable.name} in ${row.environment.name}`}
-              title={shown || "Add notes"}
+              title={operation?.error ?? (shown || "Add notes")}
               onClick={() =>
                 grid.current?.setActivePosition(
                   { rowIdx, idx: column.idx },
@@ -742,11 +935,6 @@ export function VaultWorkspace({
               <span className="value">
                 {shown || <span className="text-muted-foreground">—</span>}
               </span>
-              {operation?.error ? (
-                <span role="alert" className="origin field-error-message">
-                  {operation.error}
-                </span>
-              ) : null}
             </Button>
             {operation?.status === "saving" ? (
               <span
@@ -765,8 +953,12 @@ export function VaultWorkspace({
                 variant="ghost"
                 size="icon-xs"
                 className="cell-retry"
-                aria-label={`Retry saving notes for ${row.variable.name} in ${row.environment.name}`}
-                onClick={() => void save(row, operation.payload)}
+                aria-label={`${operation.code === "conflict" ? "Review notes draft for" : "Retry saving notes for"} ${row.variable.name} in ${row.environment.name}`}
+                onClick={() =>
+                  void (operation.code === "conflict"
+                    ? reviewConflict(row, operation)
+                    : save(row, operation.payload))
+                }
               >
                 <RotateCcw />
               </Button>
@@ -816,14 +1008,88 @@ export function VaultWorkspace({
           </div>
         ) : null}
         {Object.entries(operations)
+          .filter(([, operation]) => operation.status === "error")
+          .map(([id, operation]) => {
+            const row = rows.find((row) => row.id === id);
+            return (
+              <div key={id} role="alert" className="alert error">
+                <span>
+                  {String(operation.payload.name)}: {operation.error} Your draft
+                  is retained.
+                </span>
+                {row ? (
+                  <Button
+                    variant="outline"
+                    disabled={reviewBusy}
+                    onClick={() => void reviewConflict(row, operation)}
+                  >
+                    Review draft
+                  </Button>
+                ) : (
+                  <Input
+                    readOnly
+                    type={
+                      operation.field === "value" && !allVisible
+                        ? "password"
+                        : "text"
+                    }
+                    aria-label={`Retained draft for ${String(operation.payload.name)}`}
+                    value={String(operation.payload[operation.field] ?? "")}
+                  />
+                )}
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setOperations((previous) => {
+                      const next = { ...previous };
+                      delete next[id];
+                      return next;
+                    });
+                    setDrafts((previous) => {
+                      const next = { ...previous };
+                      delete next[JSON.stringify([id, operation.field])];
+                      return next;
+                    });
+                  }}
+                >
+                  Discard draft
+                </Button>
+              </div>
+            );
+          })}
+        {Object.entries(drafts)
           .filter(
-            ([id, operation]) =>
-              operation.status === "error" &&
-              !rows.some((row) => row.id === id),
+            ([, draft]) =>
+              operations[draft.row.id]?.field !== draft.field ||
+              !operations[draft.row.id],
           )
-          .map(([id, operation]) => (
-            <div key={id} role="alert" className="alert error">
-              {operation.error}
+          .map(([key, draft]) => (
+            <div key={key} className="alert" role="status">
+              <span>
+                Unsaved {draft.field} draft for {draft.row.variable.name} in{" "}
+                {draft.row.environment.name}.
+              </span>
+              <Button
+                variant="outline"
+                disabled={reviewBusy}
+                onClick={() =>
+                  void reviewConflict(draft.row, { ...draft, status: "error" })
+                }
+              >
+                Review draft
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() =>
+                  setDrafts((previous) => {
+                    const next = { ...previous };
+                    delete next[key];
+                    return next;
+                  })
+                }
+              >
+                Discard draft
+              </Button>
             </div>
           ))}
         {catalog?.errors.map((env) => (
@@ -840,7 +1106,7 @@ export function VaultWorkspace({
             size="sm"
             aria-pressed={!environments.size}
             onClick={() => {
-              activeCommit.current?.();
+              activePause.current?.();
               hide();
               setEnvironments(new Set());
             }}
@@ -856,7 +1122,7 @@ export function VaultWorkspace({
               aria-pressed={environments.has(env.id)}
               title={`${env.name} (${env.id})`}
               onClick={() => {
-                activeCommit.current?.();
+                activePause.current?.();
                 hide();
                 setEnvironments((previous) => {
                   const next = new Set(previous);
@@ -867,6 +1133,10 @@ export function VaultWorkspace({
               }}
             >
               {env.name}
+              {catalog.environments.filter((other) => other.name === env.name)
+                .length > 1 && env.account
+                ? ` · ${env.account}`
+                : ""}
               <span className="filter-count">
                 {rows.filter((row) => row.vaultId === env.id).length}
               </span>
@@ -883,7 +1153,7 @@ export function VaultWorkspace({
               placeholder="Search secrets, environments, or notes…"
               value={search}
               onChange={(e) => {
-                activeCommit.current?.();
+                activePause.current?.();
                 setSearch(e.target.value);
               }}
             />
@@ -904,9 +1174,9 @@ export function VaultWorkspace({
             size="icon"
             aria-label="Refresh secrets"
             title="Refresh secrets"
-            disabled={loading || readPending || !mutationToken}
+            disabled={loading || readPending || saving || !mutationToken}
             onClick={() => {
-              activeCommit.current?.();
+              activePause.current?.();
               setDetails(undefined);
               void load(true);
             }}
@@ -922,14 +1192,20 @@ export function VaultWorkspace({
               allVisible || revealing ? "Hide all values" : "Reveal all values"
             }
             aria-pressed={allVisible || revealing}
-            disabled={loading || !rows.length}
-            onClick={() => void toggleValues()}
+            disabled={
+              loading || (saving && !allVisible && !revealing) || !rows.length
+            }
+            onClick={() => {
+              activePause.current?.();
+              void toggleValues();
+            }}
           >
             <EyeIcon hidden={allVisible || revealing} />
           </Button>
           <Button
-            disabled={loading || !catalog?.matrices.length}
+            disabled={loading || saving || !catalog?.matrices.length}
             onClick={() => {
+              activePause.current?.();
               setAddEnvironment(
                 catalog!.matrices.find(({ id }) => environments.has(id))?.id ??
                   catalog!.matrices[0].id,
@@ -949,7 +1225,7 @@ export function VaultWorkspace({
             rows={filtered}
             sortColumns={sortColumns}
             onSortColumnsChange={(next) => {
-              activeCommit.current?.();
+              activePause.current?.();
               grid.current?.setActivePosition({ rowIdx: -1, idx: 0 });
               setSortColumns(next);
             }}
@@ -995,6 +1271,9 @@ export function VaultWorkspace({
             }}
           />
           <footer className="matrix-footer">
+            <span title="Enter saves; Tab saves and moves; Shift+Enter adds a line in Notes; Escape cancels">
+              Enter save · Tab move · Shift+Enter notes newline · Esc cancel
+            </span>
             <span>
               {catalog
                 ? `${filtered.length} of ${rows.length} secrets`
@@ -1047,6 +1326,76 @@ export function VaultWorkspace({
           {notice}
         </div>
       </main>
+      {review ? (
+        <Dialog
+          title={`Review draft for ${review.row.variable.name}`}
+          onClose={() => setReview(undefined)}
+        >
+          <p>
+            The secret changed since you started editing. Compare the latest{" "}
+            {review.operation.field} with your draft before saving.
+          </p>
+          <label>
+            Latest {review.operation.field}
+            <Textarea
+              readOnly
+              aria-label="Latest field"
+              value={review.latest ?? "Hidden"}
+            />
+          </label>
+          {review.latest === undefined ? (
+            <Button
+              disabled={reviewBusy}
+              onClick={async () => {
+                setReviewBusy(true);
+                try {
+                  const result = await reveal(review.row);
+                  setReview((current) =>
+                    current === review
+                      ? { ...current, latest: result.editableValue }
+                      : current,
+                  );
+                } catch (error) {
+                  setError((error as Error).message);
+                } finally {
+                  setReviewBusy(false);
+                }
+              }}
+            >
+              Reveal latest value
+            </Button>
+          ) : null}
+          <label>
+            Your draft
+            <Textarea
+              aria-label="Retained draft"
+              value={review.draft}
+              onChange={(e) => setReview({ ...review, draft: e.target.value })}
+            />
+          </label>
+          <Button
+            disabled={reviewBusy || review.latest === undefined}
+            onClick={() => {
+              const current = review;
+              setReview(undefined);
+              void save(current.row, {
+                action: "set",
+                name: current.row.variable.name,
+                environment: "vault",
+                [current.operation.field]: current.draft,
+                fingerprint: current.row.matrix.fingerprint,
+                versions:
+                  current.row.matrix.versions[current.row.variable.name],
+              });
+            }}
+          >
+            Save reviewed draft
+          </Button>
+          <Button variant="outline" onClick={() => setReview(undefined)}>
+            Keep draft
+          </Button>
+        </Dialog>
+      ) : null}
       {details ? (
         <Editor
           key={details.row.id}
@@ -1084,6 +1433,7 @@ export function VaultWorkspace({
               {catalog?.matrices.map(({ id, matrix }) => (
                 <NativeSelectOption key={id} value={id}>
                   {matrix.config.name}
+                  {matrix.config.account ? ` · ${matrix.config.account}` : ""}
                 </NativeSelectOption>
               ))}
             </NativeSelect>

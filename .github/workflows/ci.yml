@@ -14,3 +14,7 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: npm run format:check
+      - run: npx playwright-core install --with-deps chromium
+      - run: npm run test:vault-saves
+        env:
+          PLAYWRIGHT_BROWSER: chromium

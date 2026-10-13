@@ -49,8 +49,9 @@ multiple selections; **All environments** clears the selection. Filtering and
 search run locally. **Refresh** rescans environments and reloads their secrets.
 
 Reads run two vaults at a time and use the existing 30-second memory cache. A
-malformed or inaccessible vault reports an error beside the combined list while
-other environments remain available. Values stay masked by default. Revealing
+inaccessible vault reports an error beside the combined list while other
+environments remain available. Incompatible credential items are skipped with
+item-level diagnostics; compatible secrets in the same vault stay available. Values stay masked by default. Revealing
 all values reveals the selected environments; hiding values or changing
 filters clears revealed values. Already opened cells reuse their values in
 browser memory for immediate reopening, without exposing them in the masked
@@ -58,6 +59,16 @@ list. Refresh, hiding values, changing environment filters, and connection
 errors clear that cache; saves invalidate the edited cell. Nothing is persisted
 to browser storage. After the server's vault snapshot expires, a single-cell
 reveal reads only the selected credential through the SDK.
+
+In vault mode, Enter/Tab and moving to another grid cell save a changed edit.
+Searching, filtering, sorting, Refresh, and the toolbar retain an unfinished
+edit as an unsaved draft instead. Reopen the cell to continue, or use **Review
+draft** to compare it with the latest data. Drafts live only in browser memory
+and are lost when the page is closed or reloaded. **Discard draft** removes one.
+Save conflicts retain your draft and require reviewing the latest field before
+**Save reviewed draft**; a further concurrent change still rejects the save.
+Successful saves update the affected vault's verified result without reloading
+the whole catalog. The row stays blocked until that result is applied.
 
 Notes are visible in their own grid column and support inline editing, including
 multiline text with Shift+Enter or Alt+Enter. Enter saves the note. Notes-only saves preserve the credential value
@@ -76,9 +87,11 @@ attempts restoration on failure.
 As in schema mode, variables are API Credential items with an environment-variable
 name and a single `credential` field. Login and other item categories are not
 environment variables and are excluded. A vault with invalid or duplicate API
-Credential names reports an error for that vault; other vaults remain available.
+Credential names reports item-level diagnostics and excludes those items; compatible
+credentials in the same vault remain available. Schema mode still requires strict names.
 Notes are included in the authenticated grid response. Secret values are
-returned only by the protected reveal flow.
+returned only by protected reveal requests, or a save explicitly requesting
+revealed results while values are already visible.
 
 An explicit schema path must exist and be valid; a missing or invalid supplied
 schema never falls back to vault discovery. Export, check, explain, and run still
@@ -467,6 +480,10 @@ creation, masking/reveal, notes-only updates, replacement values, empty
 overrides, inheritance, and confirmed deletion, and removes the fixture.
 Existing item versions are checked to remain unchanged. Chrome must be installed.
 If interrupted, `.local/ui-test-recovery.json` identifies only that test fixture.
+
+`npm run test:vault-saves` verifies blocked saves, rapid follow-up editing, local
+drafts, and reviewed conflict recovery with a memory provider. CI runs this
+browser regression suite with Chromium.
 
 `npm run test:vaults` verifies discovery, vault isolation, search, inline editing,
 masking, empty vaults, creation, renaming, and deletion using a memory provider.

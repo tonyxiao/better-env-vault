@@ -780,7 +780,10 @@ main {
   gap: 0;
 }
 .vault-grid .vault-environment-cell span {
-  display: none;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .vault-grid .spreadsheet-input {
   min-height: 26px;

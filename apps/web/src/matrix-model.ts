@@ -5,6 +5,7 @@ import type {
 } from "../../../packages/core/src/resolver.js";
 
 export interface Matrix {
+  revision?: number;
   mode?: "schema" | "vault";
   fingerprint: string;
   config: ProjectConfig;

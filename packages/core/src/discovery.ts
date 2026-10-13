@@ -90,6 +90,7 @@ export async function connectDiscovery(
         if (!accessible.has(id)) owners.delete(id);
       return vaults;
     },
+    diagnostics: (id) => owner(id).diagnostics?.(id) ?? [],
     readVault: async (id) => owner(id).readVault(id),
     readItem: async (id, itemId) => owner(id).readItem!(id, itemId),
     save: async (id, name, value, notes, previous) =>

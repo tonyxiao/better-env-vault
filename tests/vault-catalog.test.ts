@@ -72,7 +72,7 @@ it("reveals selected environments only and clears all values when masked again",
     "changed",
   );
 });
-it("refreshes all environments and isolates a malformed vault", async () => {
+it("refreshes all environments and skips malformed items without hiding their vault", async () => {
   const { browser, provider } = await fixture();
   await browser.catalog();
   await provider.save(dev, "NEW", "private-new", "");
@@ -82,6 +82,7 @@ it("refreshes all environments and isolates a malformed vault", async () => {
   expect(
     catalogRows((await browser.catalog(true)) as VaultCatalog),
   ).toHaveLength(4);
+  await provider.save(staging, "COMPATIBLE", "private-compatible", "");
   provider.vaults[staging].push({
     id: "bad",
     name: "bad name",
@@ -91,7 +92,10 @@ it("refreshes all environments and isolates a malformed vault", async () => {
   });
   const catalog = await browser.catalog(true);
   expect(catalog.errors[0]).toMatchObject({ id: staging, name: "Staging" });
-  expect(catalog.matrices).toHaveLength(2);
+  expect(catalog.matrices).toHaveLength(3);
+  expect(
+    catalogRows(catalog as VaultCatalog).some((row) => row.vaultId === staging),
+  ).toBe(true);
   expect(JSON.stringify(catalog)).not.toContain("hidden");
 });
 it("explicit desktop authentication overrides an ambient token; service-account mode uses token scope", async () => {
@@ -233,4 +237,53 @@ it("shows and searches notes with masked values, sorts columns, and preserves se
     value: "private-prod",
     notes: "Production checklist",
   });
+});
+
+it("returns verified save metadata and reuses the edited vault snapshot without a second read", async () => {
+  const { browser, provider } = await fixture();
+  const catalog = await browser.catalog();
+  const matrix = catalog.matrices.find((entry) => entry.id === dev)!.matrix;
+  const read = vi.spyOn(provider, "readVault");
+  const result = await browser.edit(dev, {
+    action: "set",
+    name: "TOKEN",
+    environment: "vault",
+    notes: "updated",
+    fingerprint: matrix.fingerprint,
+    versions: matrix.versions.TOKEN,
+  });
+  expect(read).toHaveBeenCalledTimes(1);
+  expect(result.matrix.notes.TOKEN).toBe("updated");
+  expect(JSON.stringify(result)).not.toContain("private-dev");
+  await browser.catalog();
+  await browser.reveal(dev, {
+    environment: "vault",
+    name: "TOKEN",
+    fingerprint: result.matrix.fingerprint,
+    itemId: provider.vaults[dev][0].id,
+    version: result.matrix.versions.TOKEN.vault,
+  });
+  expect(read).toHaveBeenCalledTimes(1);
+});
+
+it("orders create destinations independently of concurrent read completion", async () => {
+  const { browser, provider } = await fixture();
+  const read = provider.readVault.bind(provider);
+  let release!: () => void;
+  let started!: () => void;
+  const gate = new Promise<void>((done) => (release = done));
+  const observed = new Promise<void>((done) => (started = done));
+  provider.readVault = async (id) => {
+    if (id === dev) await gate;
+    const items = await read(id);
+    if (id === prod) started();
+    return items;
+  };
+  const pending = browser.catalog();
+  await observed;
+  release();
+  const catalog = await pending;
+  expect(catalog.matrices.map((entry) => entry.id)).toEqual(
+    catalog.environments.map((env) => env.id),
+  );
 });
