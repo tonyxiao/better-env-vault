@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -72,6 +73,7 @@ function VaultValueEditor({
   rowIdx,
   column,
   field = "value",
+  initiallyExpanded = false,
   onClose,
   hideEpoch,
   operation,
@@ -83,6 +85,7 @@ function VaultValueEditor({
   draftValue,
 }: RenderEditCellProps<VaultRow> & {
   field?: "value" | "notes";
+  initiallyExpanded?: boolean;
   hideEpoch: number;
   operation?: Operation;
   save: (row: VaultRow, payload: Record<string, unknown>) => Promise<boolean>;
@@ -146,6 +149,7 @@ function VaultValueEditor({
       shiftEnterNewline={field === "notes"}
       allowJson={field === "value"}
       multilineNotes={field === "notes"}
+      initiallyExpanded={initiallyExpanded}
       hideEpoch={hideEpoch}
       initialValue={{
         value: field === "notes" ? row.notes : row.variable.value,
@@ -256,6 +260,20 @@ export function VaultWorkspace({
   const [deleteRows, setDeleteRows] = useState<VaultRow[]>();
   const [confirmation, setConfirmation] = useState("");
   const grid = useRef<DataGridHandle>(null);
+  const expandedEditor = useRef<string | undefined>(undefined);
+  const activePosition = useRef<
+    | { rowId?: string; columnKey: string; rowIdx: number; idx: number }
+    | undefined
+  >(undefined);
+  const searchBookmark = useRef<
+    | {
+        query: string;
+        position: typeof activePosition.current;
+        collapsed: ReadonlySet<string>;
+      }
+    | undefined
+  >(undefined);
+
   const [gridWidth, setGridWidth] = useState(0);
   const [resizedWidths, setResizedWidths] = useState<Record<string, number>>(
     {},
@@ -827,6 +845,9 @@ export function VaultWorkspace({
       renderEditCell: (props) => (
         <VaultValueEditor
           {...props}
+          initiallyExpanded={
+            expandedEditor.current === JSON.stringify([props.row.id, "value"])
+          }
           hideEpoch={hideEpoch}
           operation={
             operations[props.row.id]?.field === "value"
@@ -964,6 +985,9 @@ export function VaultWorkspace({
         <VaultValueEditor
           {...props}
           field="notes"
+          initiallyExpanded={
+            expandedEditor.current === JSON.stringify([props.row.id, "notes"])
+          }
           hideEpoch={hideEpoch}
           operation={
             operations[props.row.id]?.field === "notes"
@@ -1068,6 +1092,25 @@ export function VaultWorkspace({
       : catalog
         ? "Refreshing secrets…"
         : "Loading 1Password secrets…";
+  const restoreSearchCell = useEffectEvent(() => {
+    const position = searchBookmark.current?.position;
+    if (!position) return;
+    const found = visibleRows.findIndex((row) =>
+      "variable" in row
+        ? row.id === position.rowId
+        : row.groupId === position.rowId,
+    );
+    const rowIdx =
+      found >= 0 ? found : Math.min(position.rowIdx, visibleRows.length - 1);
+    const idx = columns.findIndex(
+      (column) => column.key === position.columnKey,
+    );
+    if (rowIdx >= -1)
+      focusGridCell(grid.current, {
+        rowIdx,
+        idx: idx >= 0 ? idx : position.idx,
+      });
+  });
   useSearchShortcuts(
     "vault-search",
     () => {
@@ -1080,7 +1123,21 @@ export function VaultWorkspace({
       else if (visibleRows.length)
         focusGridCell(grid.current, { rowIdx: 0, idx: 1 });
     },
-    () => activePause.current?.(),
+    () => {
+      searchBookmark.current = {
+        query: search,
+        position: activePosition.current,
+        collapsed,
+      };
+      activePause.current?.();
+    },
+    () => {
+      const bookmark = searchBookmark.current;
+      if (!bookmark?.position) return false;
+      setSearch(bookmark.query);
+      setCollapsed(bookmark.collapsed);
+      requestAnimationFrame(() => restoreSearchCell());
+    },
   );
 
   return (
@@ -1260,7 +1317,7 @@ export function VaultWorkspace({
             <Input
               id="vault-search"
               aria-keyshortcuts="Meta+K Control+K /"
-              title="Search (Cmd/Ctrl+K or /); Enter or ↓ returns to the grid"
+              title="Search (Cmd/Ctrl+K or /); Enter or ↓ focuses results; Esc restores the prior cell"
               placeholder="Search names, values, environments, or notes…"
               value={search}
               onChange={(e) => {
@@ -1402,6 +1459,14 @@ export function VaultWorkspace({
             style={{
               height: `min(${Math.max(104, 32 + visibleRows.length * 36)}px, calc(100dvh - 182px))`,
             }}
+            onActivePositionChange={({ row, rowIdx, column }) => {
+              activePosition.current = {
+                rowId: row?.id,
+                rowIdx,
+                idx: column?.idx ?? -1,
+                columnKey: column?.key ?? "",
+              };
+            }}
             onCellKeyDown={(args, event) => {
               if (args.mode === "EDIT") {
                 event.preventGridDefault();
@@ -1423,6 +1488,12 @@ export function VaultWorkspace({
               ) {
                 event.preventDefault();
                 event.preventGridDefault();
+                expandedEditor.current =
+                  event.key === "Enter" &&
+                  event.shiftKey &&
+                  (event.metaKey || event.ctrlKey)
+                    ? JSON.stringify([args.row.id, args.column.key])
+                    : undefined;
                 args.setActivePosition(
                   { rowIdx: args.rowIdx, idx: args.column.idx },
                   { enableEditor: true },
@@ -1430,6 +1501,7 @@ export function VaultWorkspace({
               }
             }}
             onCellMouseDown={(event) => {
+              expandedEditor.current = undefined;
               if (!("variable" in event.row)) {
                 activePause.current?.();
                 return;

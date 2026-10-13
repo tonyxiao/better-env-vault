@@ -36,6 +36,19 @@ try {
     name: "KEY value in infra",
     exact: true,
   });
+  async function focusedCell(name: string, column: number) {
+    await page.waitForFunction(
+      ({ name, column }) => {
+        const active = document.activeElement;
+        return (
+          active?.getAttribute("role") === "gridcell" &&
+          active.getAttribute("aria-colindex") === String(column) &&
+          active.closest('[role="row"]')?.textContent?.includes(name)
+        );
+      },
+      { name, column },
+    );
+  }
   async function searchFor(text: string, shortcut = "Control+k") {
     await page.keyboard.press(shortcut);
     await search.fill(text);
@@ -53,6 +66,7 @@ try {
   await input.waitFor();
   await input.fill("cancelled");
   await input.press("Escape");
+  await focusedCell("KEY", 4);
   assert.equal(await input.count(), 0);
   assert.equal(writes, 0);
   await page.keyboard.press("F2");
@@ -85,6 +99,9 @@ try {
   );
   await expanded.press("Control+Shift+Enter");
   await drawer.waitFor({ state: "hidden" });
+  await page.waitForFunction(
+    () => document.activeElement?.tagName === "TEXTAREA",
+  );
   assert.equal(
     await input.evaluate((el) => document.activeElement === el),
     true,
@@ -116,6 +133,9 @@ try {
   await drawer.getByRole("textbox").fill("notes\nsecond");
   await page.keyboard.press("Control+Shift+Enter");
   await drawer.waitFor({ state: "hidden" });
+  await page.waitForFunction(
+    () => document.activeElement?.tagName === "TEXTAREA",
+  );
   assert.equal(await notes.inputValue(), "notes\nsecond");
   await notes.press("Control+Enter");
   await page
@@ -133,6 +153,11 @@ try {
     name: "JSON value in infra",
     exact: true,
   });
+  await page.waitForFunction(
+    () =>
+      document.activeElement?.getAttribute("aria-label") ===
+      "JSON value in infra",
+  );
   assert.equal(
     await jsonInline.evaluate((el) => document.activeElement === el),
     true,
@@ -189,6 +214,43 @@ try {
       .getByRole("grid")
       .evaluate((el) => el.contains(document.activeElement)),
   );
+  // Cancel search back to the actual prior cell, even after filtering it out.
+  await focusedCell("KEY", 4);
+  await page.keyboard.press("ArrowRight");
+  await focusedCell("KEY", 5);
+  await page.keyboard.press("Meta+k");
+  await search.fill("JSON");
+  await page
+    .getByRole("button", { name: "Edit JSON in infra", exact: true })
+    .waitFor();
+  await search.press("Escape");
+  await focusedCell("KEY", 5);
+  assert.equal(await search.inputValue(), "");
+  await page.keyboard.press("ArrowLeft");
+  await focusedCell("KEY", 4);
+  await page.keyboard.press("Meta+Shift+Enter");
+  await drawer.waitFor();
+  await drawer.getByRole("textbox").press("ArrowDown");
+  await page.keyboard.press("Escape");
+  await drawer.waitFor({ state: "hidden" });
+  await focusedCell("KEY", 4);
+  await page.keyboard.press("ArrowUp");
+  await focusedCell("JSON", 4);
+  await page.keyboard.press("Enter");
+  await drawer.waitFor();
+  await page.keyboard.press("Escape");
+  await drawer.waitFor({ state: "hidden" });
+  await focusedCell("JSON", 4);
+  await page.keyboard.press("ArrowDown");
+  await focusedCell("KEY", 4);
+  await page.keyboard.press("Meta+k");
+  assert.equal(
+    await search.evaluate((el) => document.activeElement === el),
+    true,
+  );
+  await search.press("Escape");
+  await focusedCell("KEY", 4);
+
   await page
     .getByRole("combobox", { name: "Group secrets" })
     .selectOption("environment");
@@ -201,6 +263,19 @@ try {
       .getByRole("treegrid")
       .evaluate((el) => el.contains(document.activeElement)),
   );
+  await focusedCell("KEY", 4);
+  await page.keyboard.press("ArrowRight");
+  await focusedCell("KEY", 5);
+  await page.keyboard.press("Meta+k");
+  await search.fill("JSON");
+  await search.press("Escape");
+  await focusedCell("KEY", 5);
+  assert.equal(await search.inputValue(), "KEY");
+  await page.keyboard.press("Meta+Shift+Enter");
+  await drawer.waitFor();
+  await page.keyboard.press("Escape");
+  await drawer.waitFor({ state: "hidden" });
+  await focusedCell("KEY", 5);
   assert.deepEqual(errors, []);
 
   const schema = await fixture("# @public @optional\nLABEL=base\n");
@@ -238,6 +313,22 @@ try {
     assert.equal(await schemaInput.inputValue(), "schema draft\nsecond");
     await schemaInput.press("Escape");
     assert.equal(await schemaInput.count(), 0);
+    await focusedCell("LABEL", 3);
+    await page.keyboard.press("ArrowRight");
+    await focusedCell("LABEL", 4);
+    await page.keyboard.press("Meta+k");
+    await schemaSearch.fill("no matches");
+    await page.getByText("No matching variables", { exact: true }).waitFor();
+    await schemaSearch.press("Escape");
+    await focusedCell("LABEL", 4);
+    assert.equal(await schemaSearch.inputValue(), "LABEL");
+    await page.keyboard.press("Meta+Shift+Enter");
+    await drawer.waitFor();
+    await page.keyboard.press("Escape");
+    await drawer.waitFor({ state: "hidden" });
+    await focusedCell("LABEL", 4);
+    await page.keyboard.press("ArrowRight");
+    await focusedCell("LABEL", 5);
     assert.deepEqual(errors, []);
   } finally {
     await schemaApp.close();

@@ -10,7 +10,7 @@ export function focusGridCell(
   requestAnimationFrame(() => {
     grid?.element
       ?.querySelector<HTMLElement>(
-        '[role="gridcell"][tabindex="0"], [role="row"][tabindex="0"]',
+        '[role="gridcell"][tabindex="0"], [role="columnheader"][tabindex="0"], [role="row"][tabindex="0"]',
       )
       ?.focus();
   });
@@ -21,6 +21,7 @@ export function useSearchShortcuts(
   searchId: string,
   focusGrid: () => void,
   beforeSearch?: () => void,
+  cancelSearch?: () => void | boolean,
 ) {
   const handleKey = useEffectEvent((event: KeyboardEvent) => {
     if (event.isComposing || document.querySelector('[role="dialog"]')) return;
@@ -44,7 +45,6 @@ export function useSearchShortcuts(
     ) {
       event.preventDefault();
       event.stopPropagation();
-      beforeSearch?.();
       search.focus();
       search.select();
     } else if (
@@ -56,12 +56,22 @@ export function useSearchShortcuts(
     ) {
       event.preventDefault();
       event.stopPropagation();
-      focusGrid();
+      if (event.key === "Escape" && cancelSearch) {
+        if (cancelSearch() === false) focusGrid();
+      } else focusGrid();
     }
   });
   useEffect(() => {
     const listener = (event: KeyboardEvent) => handleKey(event);
+    const focus = (event: FocusEvent) => {
+      if ((event.target as HTMLElement | null)?.id === searchId) enterSearch();
+    };
     window.addEventListener("keydown", listener, true);
-    return () => window.removeEventListener("keydown", listener, true);
+    window.addEventListener("focusin", focus);
+    return () => {
+      window.removeEventListener("keydown", listener, true);
+      window.removeEventListener("focusin", focus);
+    };
   }, []);
+  const enterSearch = useEffectEvent(() => beforeSearch?.());
 }

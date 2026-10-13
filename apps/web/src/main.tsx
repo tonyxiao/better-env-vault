@@ -581,7 +581,7 @@ function App() {
             <Input
               id="search"
               aria-keyshortcuts="Meta+K Control+K /"
-              title="Search (Cmd/Ctrl+K or /); Enter or ↓ returns to the grid"
+              title="Search (Cmd/Ctrl+K or /); Enter or ↓ focuses results; Esc restores the prior cell"
               placeholder={
                 vaultMode
                   ? "Search variables…"
@@ -749,6 +749,8 @@ function App() {
               busy={busy}
               hideEpoch={hideEpoch}
               resetEpoch={gridResetEpoch}
+              search={search}
+              onSearchChange={setSearch}
               operations={operations}
               selectedRows={selectedRows}
               onSelectedRowsChange={setSelectedRows}

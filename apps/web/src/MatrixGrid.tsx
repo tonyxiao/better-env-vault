@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState,
+  useCallback,
+} from "react";
 import {
   DataGrid,
   SelectColumn,
@@ -50,6 +57,8 @@ interface Props {
   busy: boolean;
   hideEpoch: number;
   resetEpoch: number;
+  search: string;
+  onSearchChange: (search: string) => void;
   operations: Record<string, SaveOperation>;
   selectedRows: ReadonlySet<string>;
   onSelectedRowsChange: (selected: Set<string>) => void;
@@ -76,8 +85,10 @@ function GridEditor({
   registerCommit,
   onNavigate,
   draftValue,
+  initiallyExpanded = false,
 }: RenderEditCellProps<GridRow> & {
   draftValue?: string;
+  initiallyExpanded?: boolean;
   environment: string;
   matrix: Matrix;
   allVisible: boolean;
@@ -117,6 +128,7 @@ function GridEditor({
     <SpreadsheetEditor
       variable={variable}
       environment={environment}
+      initiallyExpanded={initiallyExpanded}
       hideEpoch={hideEpoch}
       draftValue={draftValue}
       initialValue={initialValue}
@@ -164,6 +176,8 @@ export function MatrixGrid(props: Props) {
     busy,
     hideEpoch,
     resetEpoch,
+    search,
+    onSearchChange,
     operations,
     selectedRows,
     onSelectedRowsChange,
@@ -173,6 +187,15 @@ export function MatrixGrid(props: Props) {
     onDetails,
   } = props;
   const grid = useRef<DataGridHandle>(null);
+  const expandedEditor = useRef<string | undefined>(undefined);
+  const activePosition = useRef<
+    | { name?: string; columnKey: string; rowIdx: number; idx: number }
+    | undefined
+  >(undefined);
+  const searchBookmark = useRef<
+    { query: string; position: typeof activePosition.current } | undefined
+  >(undefined);
+
   const activeEdit = useRef<ActiveEdit | undefined>(undefined);
   const registerCommit = useCallback((entry: ActiveEdit | undefined) => {
     activeEdit.current = entry;
@@ -557,6 +580,10 @@ export function MatrixGrid(props: Props) {
       renderEditCell: (editor: RenderEditCellProps<GridRow>) => (
         <GridEditor
           {...editor}
+          initiallyExpanded={
+            expandedEditor.current ===
+            JSON.stringify([editor.row.name, environment])
+          }
           environment={environment}
           matrix={matrix}
           allVisible={allVisible}
@@ -577,12 +604,42 @@ export function MatrixGrid(props: Props) {
       ),
     })),
   ];
+  const restoreSearchCell = useEffectEvent(() => {
+    const position = searchBookmark.current?.position;
+    if (!position) return;
+    const found = rows.findIndex((row) => row.name === position.name);
+    const rowIdx =
+      position.rowIdx < 0
+        ? -1
+        : found >= 0
+          ? found
+          : Math.min(position.rowIdx, rows.length - 1);
+    const idx = columns.findIndex(
+      (column) => column.key === position.columnKey,
+    );
+    if (rowIdx >= -1)
+      focusGridCell(grid.current, {
+        rowIdx,
+        idx: idx >= 0 ? idx : position.idx,
+      });
+  });
   useSearchShortcuts(
     "search",
     () => {
       if (rows.length) focusGridCell(grid.current, { rowIdx: 0, idx: 2 });
     },
-    () => activeEdit.current?.commit(),
+    () => {
+      searchBookmark.current = {
+        query: search,
+        position: activePosition.current,
+      };
+      activeEdit.current?.commit();
+    },
+    () => {
+      if (!searchBookmark.current?.position) return false;
+      onSearchChange(searchBookmark.current.query);
+      requestAnimationFrame(() => restoreSearchCell());
+    },
   );
   const rowHeight = 72;
   const height = Math.min(620, 56 + rows.length * rowHeight);
@@ -607,12 +664,21 @@ export function MatrixGrid(props: Props) {
       rowHeight={rowHeight}
       style={{ height: Math.max(184, height) }}
       onCellMouseDown={(args) => {
+        expandedEditor.current = undefined;
         const current = activeEdit.current;
         if (
           current &&
           (current.rowIdx !== args.rowIdx || current.idx !== args.column.idx)
         )
           current.commit();
+      }}
+      onActivePositionChange={({ row, rowIdx, column }) => {
+        activePosition.current = {
+          name: row?.name,
+          rowIdx,
+          idx: column?.idx ?? 0,
+          columnKey: column?.key ?? "",
+        };
       }}
       onCellKeyDown={(args, event) => {
         if (args.mode === "EDIT") {
@@ -632,6 +698,12 @@ export function MatrixGrid(props: Props) {
         ) {
           event.preventDefault();
           event.preventGridDefault();
+          expandedEditor.current =
+            event.key === "Enter" &&
+            event.shiftKey &&
+            (event.metaKey || event.ctrlKey)
+              ? JSON.stringify([args.row.name, args.column.key])
+              : undefined;
           if (editable(args.row, args.column.key))
             args.setActivePosition(
               { rowIdx: args.rowIdx, idx: args.column.idx },

@@ -103,20 +103,25 @@ The details and creation forms also provide larger resizable notes fields.
 
 Keyboard shortcuts work in both the vault browser and schema matrix:
 
-| Shortcut                                | Action                                                          |
-| --------------------------------------- | --------------------------------------------------------------- |
-| Cmd/Ctrl+K, or `/` outside a text field | Focus search and select the current query                       |
-| Enter, ↓, or Esc in search              | Focus the first matching value cell (keeps the search filter)   |
-| Arrow keys                              | Move between grid cells                                         |
-| Enter or F2 on a value/notes cell       | Start editing                                                   |
-| Enter in a cell                         | Save and move down (Shift+Enter moves up in value cells)        |
-| Tab / Shift+Tab in a cell               | Save and move to the next / previous editable cell              |
-| Cmd/Ctrl+Enter                          | Save and exit editing in place                                  |
-| Cmd/Ctrl+Shift+Enter                    | Expand an editor, or return to the cell while keeping the draft |
-| Esc while editing                       | Cancel the edit and return focus to the grid                    |
+| Shortcut                                | Action                                                                                                                      |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Cmd/Ctrl+K, or `/` outside a text field | Focus search and select the current query                                                                                   |
+| Enter or ↓ in search                    | Focus the first matching value cell (keeps the search filter)                                                               |
+| Esc in search                           | Cancel the search change and return to the previous row and column                                                          |
+| Arrow keys                              | Move between grid cells                                                                                                     |
+| Enter or F2 on a value/notes cell       | Start editing                                                                                                               |
+| Enter in a cell                         | Save and move down (Shift+Enter moves up in value cells)                                                                    |
+| Tab / Shift+Tab in a cell               | Save and move to the next / previous editable cell                                                                          |
+| Cmd/Ctrl+Enter                          | Save and exit editing in place                                                                                              |
+| Cmd/Ctrl+Shift+Enter                    | Open the expanded editor from a selected cell, expand an inline editor, or return to inline editing while keeping the draft |
+| Esc while editing                       | Cancel the edit and return focus to the grid                                                                                |
+
+Cancelling search restores the query from before search was focused, so the prior
+cell remains visible. Its identity is preserved through sorting and grouping.
 
 The expanded editor supports plain multiline values, notes, and formatted JSON.
-Enter adds a newline there. **Back to cell** also collapses it without saving;
+Arrow keys move the text caret while editing; Esc cancels and restores grid
+navigation. Enter adds a newline there. **Back to cell** also collapses it without saving;
 JSON validation and compact saves still apply after collapsing. Search shortcuts
 leave modal editors in control of focus. In the vault browser, jumping to search
 from an inline edit retains an unsaved draft for review.

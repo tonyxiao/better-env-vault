@@ -43,6 +43,7 @@ export function SpreadsheetEditor({
   shiftEnterNewline = false,
   allowJson = true,
   multilineNotes = false,
+  initiallyExpanded = false,
   hideEpoch,
   initialValue,
   draftValue,
@@ -61,6 +62,7 @@ export function SpreadsheetEditor({
   shiftEnterNewline?: boolean;
   allowJson?: boolean;
   multilineNotes?: boolean;
+  initiallyExpanded?: boolean;
   hideEpoch: number;
   initialValue?: { value?: string };
   draftValue?: string;
@@ -97,19 +99,24 @@ export function SpreadsheetEditor({
     if (allowJson && isJsonContainer(value)) {
       setJsonOpen(true);
       setJsonMode(true);
-    } else if (multilineNotes && /[\r\n]/.test(value)) setNotesOpen(true);
-  }, [loading, allowJson, multilineNotes, value]);
+    } else if (initiallyExpanded || (multilineNotes && /[\r\n]/.test(value)))
+      setNotesOpen(true);
+  }, [loading, allowJson, multilineNotes, initiallyExpanded, value]);
   const initialHideEpoch = useRef(hideEpoch);
   const field = useRef<HTMLTextAreaElement>(null);
+  const form = useRef<HTMLFormElement>(null);
   const returnToCell = useRef(false);
   useLayoutEffect(() => {
     if (jsonOpen || notesOpen || !returnToCell.current) return;
     returnToCell.current = false;
-    field.current?.focus();
-    field.current?.setSelectionRange(
-      notesSelection.current?.start ?? value.length,
-      notesSelection.current?.end ?? value.length,
-    );
+    requestAnimationFrame(() => {
+      if (!field.current?.isConnected) return;
+      field.current.focus();
+      field.current.setSelectionRange(
+        notesSelection.current?.start ?? value.length,
+        notesSelection.current?.end ?? value.length,
+      );
+    });
   }, [jsonOpen, notesOpen, value]);
   function expand() {
     if (loading || failedLoad || !shown) return;
@@ -203,10 +210,38 @@ export function SpreadsheetEditor({
   }, [canSave, saveValue, onLeave, onCommitReady]);
   function save(event: FormEvent) {
     event.preventDefault();
-    if (canSave) void onSave(saveValue);
+    if (canSave) void saveDraft(saveValue);
+  }
+  function afterExit(action: () => void) {
+    const grid = form.current?.closest('[role="grid"], [role="treegrid"]');
+    action();
+    // Modal focus traps are removed after the cell closes. Restore navigation
+    // once they are gone, without stealing focus from a newly opened editor.
+    requestAnimationFrame(() => {
+      if (document.querySelector('[role="dialog"]')) return;
+      if (
+        document.activeElement !== document.body &&
+        !grid?.contains(document.activeElement)
+      )
+        return;
+      grid
+        ?.querySelector<HTMLElement>(
+          '[role="gridcell"][aria-selected="true"][tabindex="0"]',
+        )
+        ?.focus();
+    });
+  }
+  function cancel() {
+    afterExit(onCancel);
+  }
+  function saveDraft(next: string) {
+    afterExit(() => {
+      void onSave(next);
+    });
   }
   return (
     <form
+      ref={form}
       className="spreadsheet-editor"
       aria-label={`Edit ${variable.name} in ${environment}`}
       onSubmit={save}
@@ -225,7 +260,7 @@ export function SpreadsheetEditor({
         if (event.key === "Escape") {
           event.preventDefault();
           event.stopPropagation();
-          onCancel();
+          cancel();
           return;
         }
         if (
@@ -260,8 +295,8 @@ export function SpreadsheetEditor({
         event.preventDefault();
         event.stopPropagation();
         if (loading || failedLoad || (dirty && !canSave)) return;
-        if (canSave) void onSave(saveValue);
-        else onCancel();
+        if (canSave) saveDraft(saveValue);
+        else cancel();
         if (event.key === "Tab")
           onNavigate(event.shiftKey ? "previous" : "next");
         else if (!event.ctrlKey && !event.metaKey)
@@ -280,9 +315,9 @@ export function SpreadsheetEditor({
             setEmpty(false);
           }}
           onSave={() => {
-            if (canSave) void onSave(value);
+            if (canSave) saveDraft(value);
           }}
-          onCancel={onCancel}
+          onCancel={cancel}
           onCollapse={collapse}
         />
       ) : null}
@@ -292,9 +327,9 @@ export function SpreadsheetEditor({
           initialValue={value}
           onChange={setValue}
           onSave={(compact) => {
-            void onSave(compact);
+            saveDraft(compact);
           }}
-          onCancel={onCancel}
+          onCancel={cancel}
           onCollapse={collapse}
           onPlainText={() => {
             setJsonMode(false);
@@ -410,7 +445,7 @@ export function SpreadsheetEditor({
           size="icon-xs"
           aria-label="Cancel"
           title="Cancel (Escape)"
-          onClick={onCancel}
+          onClick={cancel}
         >
           <X aria-hidden="true" />
         </Button>
