@@ -89,10 +89,17 @@ saves a compact JSON string, preserving number tokens and string contents.
 Invalid JSON disables saving. **Use plain text** returns to ordinary text editing.
 Notes are always edited as text. The JSON editor also works in schema mode.
 
-Notes are visible in their own grid column and support inline editing, including
-multiline text with Shift+Enter or Alt+Enter. Enter saves the note. Notes-only saves preserve the credential value
-and do not require revealing it. Secret values remain masked until opened or
-explicitly revealed.
+Notes are visible in their own grid column. Single-line notes still support
+quick inline editing: Enter saves and Shift+Enter or Alt+Enter adds a line.
+Existing multiline notes open a roomy notes editor automatically. Adding or
+pasting multiple lines opens it too, keeping the caret at the insertion point.
+Use **Expand notes editor** to open it for any note. In the expanded editor,
+Enter or Shift+Enter adds a line; **Save notes** or Ctrl/Cmd+Enter saves, and
+Escape/Cancel discards the current edit. Text wraps naturally; line breaks,
+blank lines, spacing, and indentation are saved as plain text. Multiline grid
+previews show the first non-empty line and a line count. Notes-only saves
+preserve the credential value and opening notes never reveals that value.
+The details and creation forms also provide larger resizable notes fields.
 
 The grid supports keyboard navigation, inline editing, reveal/hide, adding
 variables, and confirmed single or bulk deletion. Each row edit, rename,

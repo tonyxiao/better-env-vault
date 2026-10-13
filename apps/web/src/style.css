@@ -966,3 +966,42 @@ main {
   font-size: 13px;
   overflow-wrap: anywhere;
 }
+
+.notes-drawer {
+  padding: 24px;
+  overflow-y: auto;
+}
+.notes-editor-input {
+  height: min(60dvh, 560px);
+  min-height: 240px;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.notes-actions {
+  display: flex;
+  gap: 8px;
+}
+.vault-grid .notes-cell {
+  gap: 8px;
+}
+.vault-grid .notes-cell .value {
+  min-width: 0;
+  flex: 1;
+}
+.notes-line-count {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.notes-field-input {
+  min-height: 160px;
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}

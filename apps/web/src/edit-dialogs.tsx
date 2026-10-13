@@ -109,7 +109,13 @@ export function Editor({
         ? (v.value ?? "")
         : "",
   );
-  const [notes, setNotes] = useState<string>();
+  const [notes, setNotes] = useState<string | undefined>(() =>
+    vaultMode
+      ? matrix.notes?.[v.name]
+      : matrix.environmentNotes?.[cell.environment] !== undefined
+        ? (matrix.environmentNotes[cell.environment][v.name] ?? "")
+        : undefined,
+  );
   const [valueTouched, setValueTouched] = useState(false);
   const [notesTouched, setNotesTouched] = useState(false);
   const [explicitEmpty, setExplicitEmpty] = useState(false);
@@ -330,7 +336,8 @@ export function Editor({
               <label>
                 {vaultMode ? "Notes" : "Notes for this override"}
                 <Textarea
-                  rows={3}
+                  className="notes-field-input"
+                  rows={8}
                   placeholder={
                     notes === undefined
                       ? "Existing notes will be preserved. Reveal to edit them."
@@ -655,6 +662,8 @@ export function ProjectDialog({
                   Notes
                   <Textarea
                     aria-label="Initial value notes"
+                    className="notes-field-input"
+                    rows={8}
                     value={initialNotes}
                     onChange={(e) => setInitialNotes(e.target.value)}
                   />

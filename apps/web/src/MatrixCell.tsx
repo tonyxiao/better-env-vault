@@ -1,4 +1,13 @@
-import { Check, Code, Eye, EyeOff, LoaderCircle, X } from "lucide-react";
+import {
+  Check,
+  Code,
+  Eye,
+  EyeOff,
+  LoaderCircle,
+  Maximize2,
+  X,
+} from "lucide-react";
+import { NotesEditor } from "./NotesEditor.js";
 import { JsonEditor } from "./JsonEditor.js";
 import { formatJson, isJsonContainer } from "./json-value.js";
 import { Button } from "./components/ui/button.js";
@@ -33,6 +42,7 @@ export function SpreadsheetEditor({
   inputLabel,
   shiftEnterNewline = false,
   allowJson = true,
+  multilineNotes = false,
   hideEpoch,
   initialValue,
   draftValue,
@@ -50,6 +60,7 @@ export function SpreadsheetEditor({
   inputLabel?: string;
   shiftEnterNewline?: boolean;
   allowJson?: boolean;
+  multilineNotes?: boolean;
   hideEpoch: number;
   initialValue?: { value?: string };
   draftValue?: string;
@@ -74,12 +85,17 @@ export function SpreadsheetEditor({
   );
   const [shown, setShown] = useState(true);
   const [jsonOpen, setJsonOpen] = useState(false);
+  const [notesOpen, setNotesOpen] = useState(false);
+  const notesSelection = useRef<{ start: number; end: number } | undefined>(
+    undefined,
+  );
   const checkedJson = useRef(false);
   useEffect(() => {
     if (loading || checkedJson.current) return;
     checkedJson.current = true;
-    if (allowJson && isJsonContainer(value)) setJsonOpen(true);
-  }, [loading, allowJson, value]);
+    if (multilineNotes && /[\r\n]/.test(value)) setNotesOpen(true);
+    else if (allowJson && isJsonContainer(value)) setJsonOpen(true);
+  }, [loading, allowJson, multilineNotes, value]);
   const initialHideEpoch = useRef(hideEpoch);
   const field = useRef<HTMLTextAreaElement>(null);
   const cancelButton = useRef<HTMLButtonElement>(null);
@@ -193,6 +209,13 @@ export function SpreadsheetEditor({
           );
           setValue(input.value);
           setEmpty(false);
+          if (multilineNotes) {
+            notesSelection.current = {
+              start: input.selectionStart,
+              end: input.selectionEnd,
+            };
+            setNotesOpen(true);
+          }
           return;
         }
         event.preventDefault();
@@ -206,6 +229,22 @@ export function SpreadsheetEditor({
           onNavigate(event.shiftKey ? "up" : "down");
       }}
     >
+      {notesOpen && shown ? (
+        <NotesEditor
+          label={inputLabel ?? `Notes for ${variable.name} in ${environment}`}
+          value={value}
+          selection={notesSelection.current}
+          canSave={canSave}
+          onChange={(next) => {
+            setValue(next);
+            setEmpty(false);
+          }}
+          onSave={() => {
+            if (canSave) void onSave(value);
+          }}
+          onCancel={onCancel}
+        />
+      ) : null}
       {jsonOpen && shown ? (
         <JsonEditor
           label={`JSON value for ${variable.name} in ${environment}`}
@@ -238,6 +277,13 @@ export function SpreadsheetEditor({
             onChange={(event) => {
               setValue(event.target.value);
               setEmpty(false);
+              if (multilineNotes && /[\r\n]/.test(event.target.value)) {
+                notesSelection.current = {
+                  start: event.target.selectionStart,
+                  end: event.target.selectionEnd,
+                };
+                setNotesOpen(true);
+              }
             }}
             rows={1}
             wrap="off"
@@ -271,6 +317,21 @@ export function SpreadsheetEditor({
             />
             <span className="sr-only">Set an explicit empty value</span>
           </label>
+        ) : null}
+        {multilineNotes && shown && !loading && !failedLoad ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Expand notes editor"
+            title="Open a larger notes editor"
+            onClick={() => {
+              notesSelection.current = undefined;
+              setNotesOpen(true);
+            }}
+          >
+            <Maximize2 aria-hidden="true" />
+          </Button>
         ) : null}
         {allowJson && shown && !loading && !failedLoad ? (
           <Button

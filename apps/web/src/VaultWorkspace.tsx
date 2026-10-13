@@ -144,6 +144,7 @@ function VaultValueEditor({
       compact
       shiftEnterNewline={field === "notes"}
       allowJson={field === "value"}
+      multilineNotes={field === "notes"}
       hideEpoch={hideEpoch}
       initialValue={{
         value: field === "notes" ? row.notes : row.variable.value,
@@ -990,6 +991,11 @@ export function VaultWorkspace({
           typeof operation.payload.notes === "string"
             ? operation.payload.notes
             : row.notes;
+        const lines = shown.split(/\r\n|\r|\n/);
+        const preview =
+          lines.length > 1
+            ? (lines.find((line) => line.trim()) ?? "(blank lines)")
+            : shown;
         return (
           <div
             className="matrix-cell"
@@ -1015,8 +1021,11 @@ export function VaultWorkspace({
               }
             >
               <span className="value">
-                {shown || <span className="text-muted-foreground">—</span>}
+                {preview || <span className="text-muted-foreground">—</span>}
               </span>
+              {lines.length > 1 ? (
+                <span className="notes-line-count">{lines.length} lines</span>
+              ) : null}
             </Button>
             {operation?.status === "saving" ? (
               <span

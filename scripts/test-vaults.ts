@@ -91,7 +91,7 @@ try {
     await notesInput.inputValue(),
     "Edited inline notes\nSecond line",
   );
-  await notesInput.press("Enter");
+  await notesInput.press("Control+Enter");
   await page
     .getByRole("status")
     .filter({ hasText: "Saved notes for TOKEN in infra" })
