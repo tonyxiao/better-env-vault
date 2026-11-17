@@ -120,13 +120,17 @@ if (!ports.size) throw new Error("No embedded loopback listener was observed.");
 for (const path of storage)
   if (await exists(path))
     throw new Error("App-specific persistent storage was created.");
-console.log("SIGNATURE_LOOPBACK_SHUTDOWN_AND_STORAGE_OK");
+console.log(
+  ports.size
+    ? "SIGNATURE_LOOPBACK_SHUTDOWN_AND_STORAGE_OK"
+    : "SIGNATURE_SETUP_SHUTDOWN_AND_STORAGE_OK",
+);
 if (exitCode === 0 && marker.trim() === "UI_AND_AUTHENTICATED_INVENTORY_OK") {
   console.log("UI_AND_AUTHENTICATED_INVENTORY_OK");
 } else {
   // Only permit fixed diagnostic enums, never arbitrary application output.
   const state = marker.match(
-    /^APP_VERIFICATION_FAILED: (STARTUP|SESSION_UNAVAILABLE|INVENTORY_UNAVAILABLE|INVENTORY_EMPTY|UI_UNAVAILABLE|REQUEST_FAILED|JAVASCRIPT_FAILED)\s*$/,
+    /^APP_VERIFICATION_FAILED: (STARTUP|SERVICE_ACCOUNT_REQUIRED|SESSION_UNAVAILABLE|INVENTORY_UNAVAILABLE|INVENTORY_EMPTY|UI_UNAVAILABLE|REQUEST_FAILED|JAVASCRIPT_FAILED)\s*$/,
   )?.[1];
   console.log(`APP_VERIFICATION_FAILED: ${state ?? "UNAVAILABLE"}`);
   process.exitCode = 1;

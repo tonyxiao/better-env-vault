@@ -184,6 +184,74 @@ for (const path of nativeFiles) {
     args.push("--entitlements", entitlements);
   run("codesign", [...args, path]);
 }
+// A development profile authorizes Data Protection Keychain access on this Mac.
+// Reuse the installed wildcard profile, never the helper executable or credentials.
+const profileCandidates = [];
+for (const directory of [
+  join(homedir(), "Library/Developer/Xcode/UserData/Provisioning Profiles"),
+  join(homedir(), "Library/MobileDevice/Provisioning Profiles"),
+]) {
+  try {
+    for (const name of await readdir(directory))
+      if (/\.(provisionprofile|mobileprovision)$/.test(name))
+        profileCandidates.push(join(directory, name));
+  } catch {
+    /* Some Xcode installations have only one profile directory. */
+  }
+}
+profileCandidates.push(
+  join(
+    homedir(),
+    "Applications/Codex Keychain Helper.app/Contents/embedded.provisionprofile",
+  ),
+);
+let profile;
+for (const candidate of profileCandidates) {
+  try {
+    const xml = run("security", ["cms", "-D", "-i", candidate]);
+    const entitlementXML = run(
+      "plutil",
+      ["-extract", "Entitlements", "xml1", "-o", "-", "--", "-"],
+      { input: xml },
+    );
+    const ent = JSON.parse(
+      run("plutil", ["-convert", "json", "-o", "-", "--", "-"], {
+        input: entitlementXML,
+      }),
+    );
+    const expiry = run(
+      "plutil",
+      ["-extract", "ExpirationDate", "raw", "-o", "-", "--", "-"],
+      { input: xml },
+    ).trim();
+    if (
+      ent?.["com.apple.application-identifier"] === "H82Z395PDV.*" &&
+      ent["keychain-access-groups"]?.includes("H82Z395PDV.*") &&
+      Date.parse(expiry) > Date.now()
+    ) {
+      profile = candidate;
+      break;
+    }
+  } catch {
+    /* Ignore invalid or unrelated profiles. */
+  }
+}
+if (!profile)
+  throw new Error(
+    "A valid H82Z395PDV wildcard macOS development provisioning profile is required for Data Protection Keychain access. Install one through Xcode and rebuild.",
+  );
+await cp(profile, join(contents, "embedded.provisionprofile"));
+const appEntitlements = join(output, "app-entitlements.plist");
+await writeFile(
+  appEntitlements,
+  `<?xml version="1.0"?><plist version="1.0"><dict>
+<key>com.apple.application-identifier</key><string>H82Z395PDV.${identifier}</string>
+<key>com.apple.developer.team-identifier</key><string>H82Z395PDV</string>
+<key>keychain-access-groups</key><array>
+<string>H82Z395PDV.${identifier}</string>
+<string>H82Z395PDV.com.tonyxiao.codex-keychain-helper</string>
+</array></dict></plist>`,
+);
 run("codesign", [
   "--force",
   "--sign",
@@ -192,6 +260,8 @@ run("codesign", [
   "runtime",
   "--identifier",
   identifier,
+  "--entitlements",
+  appEntitlements,
   bundle,
 ]);
 // Verify the explicit identity certificate, designated requirement and hardened runtime.

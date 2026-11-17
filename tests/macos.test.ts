@@ -88,3 +88,40 @@ it("isolates per-launch credentials and rejects replay by another webview", asyn
     await second.close();
   }
 });
+
+it("keeps credential setup on private pipes, rejects invalid input without echoing it, and exits when cancelled", async () => {
+  const child = spawn(
+    process.execPath,
+    ["--disable-warning=DEP0205", "--import", "tsx", "apps/macos/server.ts"],
+    {
+      cwd: resolve(import.meta.dirname, ".."),
+      env: { PATH: process.env.PATH },
+      stdio: ["pipe", "pipe", "pipe"],
+    },
+  );
+  children.push(child);
+  let stderr = "";
+  child.stderr!.on("data", (part) => (stderr += part));
+  const lines = createInterface({ input: child.stdout! });
+  const initial = once(lines, "line");
+  child.stdin!.write(
+    JSON.stringify({ schemas: [], configureServiceAccount: true }) + "\n",
+  );
+  expect(JSON.parse((await initial)[0])).toEqual({
+    setupRequired: true,
+    error: false,
+  });
+  const rejected = once(lines, "line");
+  child.stdin!.write(
+    JSON.stringify({ serviceAccountToken: "invalid-fixture-not-a-token" }) +
+      "\n",
+  );
+  expect(JSON.parse((await rejected)[0])).toEqual({
+    setupRequired: true,
+    error: true,
+  });
+  const exited = once(child, "exit");
+  child.stdin!.end();
+  await exited;
+  expect(stderr).toBe("");
+});

@@ -1,5 +1,6 @@
 import AppKit
 import Darwin
+import Security
 import WebKit
 
 // No state restoration, preferences, URL credentials, disk cache, or payload logging.
@@ -18,6 +19,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
   var verificationState = "STARTUP"
   var schemas: [String] = []
   var discovery: [String: String] = [:]
+  var tokenField: NSSecureTextField?
+  var connectButton: NSButton?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     var limit = rlimit(rlim_cur: 0, rlim_max: 0)
@@ -48,6 +51,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
       .target = self
     appMenu.addItem(withTitle: "Browse Vaults", action: #selector(browseVaults), keyEquivalent: "b")
       .target = self
+    appMenu.addItem(
+      withTitle: "Service Account…", action: #selector(configureServiceAccount), keyEquivalent: ","
+    )
+    .target = self
     appMenu.addItem(.separator())
     appMenu.addItem(
       withTitle: "Quit Better Env Vault", action: #selector(NSApplication.terminate(_:)),
@@ -119,6 +126,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     web?.navigationDelegate = nil
     web = nil
     origin = nil
+    tokenField?.stringValue = ""
+    tokenField = nil
+    connectButton = nil
     input?.fileHandleForWriting.closeFile()
     input = nil
     if let process = child, process.isRunning {
@@ -148,7 +158,113 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     }
   }
 
-  func start() {
+  @objc func configureServiceAccount() {
+    schemas = []
+    discovery["auth"] = "service-account"
+    start(configureServiceAccount: true)
+  }
+
+  func showServiceAccountSetup(error: Bool = false) {
+    if verifying {
+      verificationState = "SERVICE_ACCOUNT_REQUIRED"
+      finishVerification(false)
+      return
+    }
+    let view = NSView(frame: window.contentView!.bounds)
+    let stack = NSStackView()
+    stack.orientation = .vertical
+    stack.alignment = .leading
+    stack.spacing = 16
+    stack.translatesAutoresizingMaskIntoConstraints = false
+    view.addSubview(stack)
+    let title = NSTextField(labelWithString: "Connect to 1Password")
+    title.font = .systemFont(ofSize: 24, weight: .semibold)
+    stack.addArrangedSubview(title)
+    let explanation = NSTextField(
+      wrappingLabelWithString:
+        "Enter a 1Password service-account token with access to your vaults. Better Env Vault connects directly through the SDK; the 1Password desktop app and CLI are not required. The token is stored only in macOS Keychain."
+    )
+    stack.addArrangedSubview(explanation)
+    let field = NSSecureTextField()
+    field.placeholderString = "Service-account token (ops_…)"
+    field.translatesAutoresizingMaskIntoConstraints = false
+    field.widthAnchor.constraint(equalToConstant: 540).isActive = true
+    field.target = self
+    field.action = #selector(connectServiceAccount)
+    stack.addArrangedSubview(field)
+    tokenField = field
+    if error {
+      let message = NSTextField(
+        wrappingLabelWithString:
+          "Could not store the token. Use a valid service-account token, unlock macOS Keychain, and allow access if prompted."
+      )
+      message.textColor = .systemRed
+      stack.addArrangedSubview(message)
+    }
+    let button = NSButton(title: "Connect", target: self, action: #selector(connectServiceAccount))
+    button.bezelStyle = .rounded
+    stack.addArrangedSubview(button)
+    connectButton = button
+    let hint = NSTextField(
+      wrappingLabelWithString:
+        "Create a scoped service account at my.1password.com → Developer → Service Accounts. You can replace the token later from the Service Account menu."
+    )
+    hint.textColor = .secondaryLabelColor
+    stack.addArrangedSubview(hint)
+    NSLayoutConstraint.activate([
+      stack.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+      stack.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+      stack.widthAnchor.constraint(equalToConstant: 540),
+    ])
+    window.contentView = view
+    window.makeFirstResponder(field)
+  }
+
+  @objc func connectServiceAccount() {
+    guard let field = tokenField, let pipe = input, connectButton?.isEnabled == true else { return }
+    do {
+      var data = try JSONSerialization.data(withJSONObject: [
+        "serviceAccountToken": field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+      ])
+      defer { data.resetBytes(in: 0..<data.count) }
+      field.stringValue = ""
+      field.currentEditor()?.undoManager?.removeAllActions()
+      field.isEnabled = false
+      connectButton?.isEnabled = false
+      data.append(10)
+      try pipe.fileHandleForWriting.write(contentsOf: data)
+    } catch {
+      field.stringValue = ""
+      showServiceAccountSetup(error: true)
+    }
+  }
+
+  // Existing headless service account, shared by the signed tools on this Mac.
+  // Query only this exact item; never enumerate credentials or expose a JS bridge.
+  func dataProtectionServiceAccountToken() -> String? {
+    let query: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: "1Password Service Account Token",
+      kSecAttrAccount as String: "money-redux",
+      kSecAttrAccessGroup as String: "H82Z395PDV.com.tonyxiao.codex-keychain-helper",
+      kSecUseDataProtectionKeychain as String: true,
+      kSecUseAuthenticationUI as String: kSecUseAuthenticationUIFail,
+      kSecReturnData as String: true,
+      kSecMatchLimit as String: kSecMatchLimitOne,
+    ]
+    var result: CFTypeRef?
+    guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+      var data = result as? Data
+    else { return nil }
+    defer { data.resetBytes(in: 0..<data.count) }
+    guard let token = String(data: data, encoding: .utf8),
+      token.hasPrefix("ops_"), token.utf8.count <= 65536,
+      !token.contains("\n"), !token.contains("\r"), !token.contains("\0")
+    else { return nil }
+    return token
+  }
+
+  func start(configureServiceAccount: Bool = false) {
     stop()
     status("Loading Better Env Vault…")
     let current = generation
@@ -169,6 +285,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     for key in ["OP_ACCOUNT", "OP_SERVICE_ACCOUNT_TOKEN"] {
       if let value = ProcessInfo.processInfo.environment[key] { environment[key] = value }
     }
+    if discovery["auth"] != "desktop", discovery["serviceAccountKeychain"] == nil,
+      environment["OP_SERVICE_ACCOUNT_TOKEN"] == nil, !configureServiceAccount,
+      let token = dataProtectionServiceAccountToken()
+    {
+      environment["BEV_DATA_PROTECTION_SERVICE_ACCOUNT_TOKEN"] = token
+    }
     process.environment = environment
     process.currentDirectoryURL = resources.appendingPathComponent("app")
     process.standardInput = incoming
@@ -183,33 +305,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     do {
       let config: [String: Any] =
         schemas.isEmpty
-        ? ["schemas": [], "discovery": discovery]
+        ? [
+          "schemas": [], "discovery": discovery, "configureServiceAccount": configureServiceAccount,
+        ]
         : ["schemas": schemas]
       let data = try JSONSerialization.data(withJSONObject: config)
       try process.run()
+      outgoing.fileHandleForWriting.closeFile()
+      incoming.fileHandleForReading.closeFile()
       child = process
       input = incoming
       incoming.fileHandleForWriting.write(data + Data([10]))
       DispatchQueue.global().async { [weak self] in
-        // Read only the bounded startup record, never server diagnostics.
-        var data = Data()
-        while data.count < 1024 {
-          let byte = outgoing.fileHandleForReading.readData(ofLength: 1)
-          if byte.isEmpty || byte == Data([10]) { break }
-          data.append(byte)
-        }
-        let record = (try? JSONSerialization.jsonObject(with: data)) as? [String: String]
-        DispatchQueue.main.async {
-          guard let self, self.generation == current else { return }
-          guard let record, let address = record["url"], let url = URL(string: address),
-            url.host == "127.0.0.1", url.scheme == "http", url.port != nil,
-            let bootstrap = record["bootstrap"], bootstrap.count == 64,
-            bootstrap.allSatisfy({ $0.isHexDigit })
-          else {
-            self.fail()
-            return
+        // Read only fixed setup states and the bounded readiness record.
+        while true {
+          var data = Data()
+          while data.count < 2048 {
+            let byte = outgoing.fileHandleForReading.readData(ofLength: 1)
+            if byte.isEmpty { return }
+            if byte == Data([10]) { break }
+            data.append(byte)
           }
-          self.load(url, bootstrap: bootstrap)
+          guard data.count < 2048,
+            let record = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+          else { return }
+          DispatchQueue.main.async {
+            guard let self, self.generation == current else { return }
+            if record["setupRequired"] as? Bool == true {
+              self.showServiceAccountSetup(error: record["error"] as? Bool == true)
+              return
+            }
+            guard let address = record["url"] as? String, let url = URL(string: address),
+              url.host == "127.0.0.1", url.scheme == "http", url.port != nil,
+              let bootstrap = record["bootstrap"] as? String, bootstrap.count == 64,
+              bootstrap.allSatisfy({ $0.isHexDigit })
+            else {
+              self.fail()
+              return
+            }
+            self.tokenField = nil
+            self.connectButton = nil
+            self.load(url, bootstrap: bootstrap)
+          }
         }
       }
       DispatchQueue.main.asyncAfter(deadline: .now() + 90) { [weak self] in

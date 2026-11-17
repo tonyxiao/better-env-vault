@@ -590,7 +590,8 @@ refresh before editing again.
 ## Native macOS application
 
 From this stable checkout, with Xcode Command Line Tools and the installed signing
-identity `Apple Development: Tony Xiao (9QULCFJ59K)`, run:
+identity `Apple Development: Tony Xiao (9QULCFJ59K)`, plus a valid wildcard macOS
+development provisioning profile for team `H82Z395PDV`, run:
 
 ```bash
 npm ci
@@ -609,15 +610,43 @@ host architecture, compiled TypeScript, and the production React assets. The
 installed app needs neither global Node nor this checkout. Rebuild separately on
 Apple Silicon and Intel for those respective architectures. Keep the bundled
 Node version and both pinned checksums current when applying runtime updates.
+The build finds a valid wildcard development profile in Xcode's provisioning-profile
+directories, or reuses the public profile embedded in the installed Codex Keychain
+Helper on this Mac. It embeds that profile and signs the app's Data Protection
+Keychain entitlements. It fails clearly if no suitable profile is available.
+The installed app does not invoke or depend on the helper.
 
-The application opens the existing vault browser. Desktop authentication uses
-the existing 1Password SDK and account discovery; install the 1Password CLI
-(`op`) for automatic account discovery or specify an account. For service-account
-access, use the same macOS Keychain entry as the CLI. Credentials are never app
+The application opens the existing vault browser and selects authentication in
+this order: an explicit desktop or named Keychain selection, an inherited
+`OP_SERVICE_ACCOUNT_TOKEN`, the app's saved `better-env-vault` Keychain entry,
+the existing Data Protection service-account item, then desktop authentication
+when no service-account credential is available. An explicitly selected service
+account never silently falls back to a different identity after an error.
+
+Service-account authentication connects the existing SDK directly to 1Password;
+it needs neither the desktop app nor the `op` CLI. The existing Data Protection
+item is service `1Password Service Account Token`, account `money-redux`, in
+access group `H82Z395PDV.com.tonyxiao.codex-keychain-helper`. The signed native
+shell queries only that exact item without prompting, passes the credential only
+to its bundled child process in memory, and does not copy or migrate it to another
+store. The item retains its `AfterFirstUnlockThisDeviceOnly` accessibility.
+
+Use the Service Account menu to enter or replace a token in a native secure field.
+It travels over an anonymous pipe to the existing `storeServiceAccountToken`
+implementation and is saved as `better-env-vault`, or the explicit named entry.
+It never enters the browser, URLs, command arguments, preferences, or log output.
+Choose only the vault access and read/write permissions required for your work.
+`envault app --auth service-account` opens this setup screen if no token exists.
+`envault auth store better-env-vault` remains a supported stdin-only alternative.
+
+Desktop fallback uses the existing SDK and account discovery. Install the
+1Password CLI (`op`) for automatic account discovery or specify an account;
+desktop mode requires the desktop app's SDK integration. Existing CLI defaults
+and schema authentication settings are preserved. Credentials are never app
 arguments or preferences:
 
 ```bash
-envault app --account <account-uuid>
+envault app --auth desktop --account <account-uuid>
 envault app --auth service-account --service-account-keychain <entry-name>
 envault app --schema /absolute/path/to/.env.schema
 ```
@@ -627,7 +656,8 @@ multiple schemas; Browse Vaults returns to vault discovery. Refresh restarts the
 embedded session; the existing UI refresh control reloads vault contents. All
 editing, notes, search, masking, and schema resolution use the same UI and core
 as the CLI server. Schema mode reads authentication settings from each schema.
-App options and selected schemas are intentionally not persisted.
+App options and selected schemas are intentionally not persisted. Service-account
+credentials persist only in Keychain.
 
 The shell starts its bundled server on a random IPv4 loopback port. A one-use
 per-launch bootstrap credential travels through anonymous pipes and a document
@@ -659,5 +689,7 @@ persistent WebKit data, HTTP storage, cache, saved state, or preferences were cr
 It runs the installed application, requires a successful session and a nonempty
 inventory from the existing provider path, prints only fixed success/failure
 markers, and quits with a corresponding exit code. It performs no vault mutations.
-The isolated `npm test` suite also checks private-pipe startup, session replay
+The isolated `npm test` suite also checks service-account precedence, Data
+Protection selection, desktop fallback, explicit authentication choices, secure
+setup selection, private-pipe startup, session replay
 rejection, cross-launch isolation, no-store responses, and shutdown on pipe closure.
