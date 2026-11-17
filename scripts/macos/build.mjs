@@ -127,6 +127,21 @@ run(
   ],
   { cwd: app, stdio: "inherit" },
 );
+const iconset = join(output, "AppIcon.iconset");
+await mkdir(iconset, { recursive: true });
+for (const size of [16, 32, 128, 256, 512]) {
+  for (const scale of [1, 2]) {
+    run("sips", [
+      "-z",
+      String(size * scale),
+      String(size * scale),
+      join(root, "apps/macos/assets/AppIcon.png"),
+      "--out",
+      join(iconset, `icon_${size}x${size}${scale === 2 ? "@2x" : ""}.png`),
+    ]);
+  }
+}
+run("iconutil", ["-c", "icns", iconset, "-o", join(resources, "AppIcon.icns")]);
 await writeFile(
   join(contents, "Info.plist"),
   `<?xml version="1.0" encoding="UTF-8"?>
@@ -138,7 +153,8 @@ await writeFile(
 <key>CFBundleExecutable</key><string>BetterEnvVault</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.1.0</string>
-<key>CFBundleVersion</key><string>1</string>
+<key>CFBundleVersion</key><string>2</string>
+<key>CFBundleIconFile</key><string>AppIcon</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
@@ -162,7 +178,7 @@ run("xcrun", [
 const entitlements = join(output, "node-entitlements.plist");
 await writeFile(
   entitlements,
-  `<?xml version="1.0"?><plist version="1.0"><dict><key>com.apple.security.cs.allow-jit</key><true/></dict></plist>`,
+  `<?xml version="1.0"?><plist version="1.0"><dict><key>com.apple.security.cs.allow-jit</key><true/><key>com.apple.security.cs.disable-library-validation</key><true/></dict></plist>`,
 );
 const nativeFiles = [];
 async function visit(path) {
@@ -267,11 +283,12 @@ if (sharedKeychain) {
       /* Ignore invalid or unrelated profiles. */
     }
   }
-  const currentDevice = run("ioreg", [
-    "-rd1",
-    "-c",
-    "IOPlatformExpertDevice",
-  ]).match(/"IOPlatformUUID" = "([^"]+)"/)?.[1];
+  const hardware = JSON.parse(
+    run("system_profiler", ["SPHardwareDataType", "-json"]),
+  ).SPHardwareDataType?.[0];
+  const currentDevice =
+    hardware?.provisioning_UDID ??
+    (process.arch === "x64" ? hardware?.platform_UUID : undefined);
   if (!currentDevice)
     throw new Error(
       "Could not identify this Mac for provisioning verification.",
@@ -289,7 +306,7 @@ if (sharedKeychain) {
   }
   for (const target of targets) {
     if (!target.udid)
-      throw new Error("Every target Mac must have a known hardware UUID.");
+      throw new Error("Every target Mac must have a known Provisioning UDID.");
     requiredDevices.push(target.udid);
   }
   const { selectProfile } = await import("../../dist/scripts/macos/profile.js");

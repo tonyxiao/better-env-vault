@@ -9,6 +9,24 @@ const archive = join(stage, "Better Env Vault-update.zip");
 const requirement =
   '=identifier "com.txlforge.better-env-vault" and anchor apple generic and certificate leaf[subject.CN] = "Apple Development: Tony Xiao (9QULCFJ59K)"';
 const hosts = process.argv.slice(2);
+const signatureOnly = hosts.includes("--signature-only");
+if (signatureOnly) hosts.splice(hosts.indexOf("--signature-only"), 1);
+const desktopFlag = hosts.indexOf("--desktop-account");
+const desktopAccount = desktopFlag >= 0 ? hosts[desktopFlag + 1] : undefined;
+if (desktopFlag >= 0) {
+  if (
+    !desktopAccount ||
+    desktopAccount.length > 128 ||
+    /[\r\n\0]/.test(desktopAccount) ||
+    desktopAccount.startsWith("ops_")
+  )
+    throw new Error("Specify a desktop account name.");
+  hosts.splice(desktopFlag, 2);
+}
+const quote = (value) => "'" + value.replaceAll("'", "'\\''") + "'";
+const verifyArgs = desktopAccount
+  ? ` --auth desktop --account ${quote(desktopAccount)}`
+  : "";
 if (
   !hosts.length ||
   hosts.some((host) => !/^[a-zA-Z0-9][a-zA-Z0-9_.@-]*$/.test(host))
@@ -57,11 +75,13 @@ if [ -e "$installed" ]; then
 fi
 mv "$app" "$installed"
 codesign --verify --deep --strict "$installed"
-"$installed/Contents/Resources/runtime/bin/node" verify.mjs
+${signatureOnly ? ": # Live verification deferred until the desktop account is unlocked." : '"$installed/Contents/Resources/runtime/bin/node" verify.mjs' + verifyArgs}
 if [ -e "$stage/previous.app" ] && command -v trash >/dev/null; then
   trash "$stage/previous.app"
 fi
 `,
   });
-  console.log(`INSTALLED_AND_VERIFIED ${host}`);
+  console.log(
+    `${signatureOnly ? "INSTALLED_SIGNATURE_VERIFIED" : "INSTALLED_AND_VERIFIED"} ${host}`,
+  );
 }

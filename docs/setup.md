@@ -603,7 +603,9 @@ This builds, signs, verifies, and installs `~/Applications/Better Env Vault.app`
 `npm run app:build` creates the signed deliverable in
 `.local/macos/Better Env Vault.app` without installing it. Both commands require
 Tony's actual signing identity and fail if it is unavailable; there is no ad-hoc
-signing fallback. The bundle ID is `com.txlforge.better-env-vault`. The build
+signing fallback. The bundle ID is `com.txlforge.better-env-vault`. The custom icon is generated
+from `scripts/macos/icon.swift` with `npm run app:icon`; the build packages all
+macOS icon resolutions into `AppIcon.icns`. The build
 uses the lockfile, a SHA-256-pinned official Node 24.22.3 macOS runtime for the
 host architecture, compiled TypeScript, and the production React assets. The
 installed app needs neither global Node nor this checkout. Rebuild separately on
@@ -615,15 +617,22 @@ profile, so the same architecture's signed app can be copied to your other Macs.
 To copy the verified portable build to the other Macs and run their installed-app
 checks, use `npm run app:deploy -- tx-m5 tx-mba cs-mini`. The command checks the
 signer and target architecture, preserves the old app until the replacement is
-verified, and leaves credentials on each Mac.
+verified, and leaves credentials on each Mac. For desktop-only devices, use
+`npm run app:deploy -- --desktop-account Xiao tx-m5 tx-mba` to verify via that
+account. If a desktop device is locked, `--signature-only` installs and checks
+the signature without claiming live inventory verification; run `app:verify`
+after unlocking it. Installing or copying a build never provisions credentials; use
+`app:connect` only on explicitly selected machines.
 
-Each Mac keeps its own app credential in Keychain. Use the native Service Account
+Only TX Studio and CS Mini should hold the service-account token. TX M5 and
+TX MBA use desktop authentication. Copying the signed app must not copy tokens.
+Each explicitly provisioned Mac keeps its own app credential in Keychain. Use the native Service Account
 screen, or provision the installed signed app directly from the existing headless
 credential without placing its value in arguments, logs, or files:
 
 ```bash
 op-agent run --no-masking -- npm run app:connect
-op-agent run --no-masking -- npm run app:connect -- tx-m5
+op-agent run --no-masking -- npm run app:connect -- cs-mini
 ```
 
 The command verifies the installed signature and sends the token through an
@@ -644,8 +653,10 @@ the app on other Macs before launch. For that capability, explicitly opt in:
 npm run app:install -- --shared-keychain --profile /path/to/all-macs.provisionprofile --devices-file tmp/macos/devices.json
 ```
 
-The inventory is a JSON array of `{ "host": "tx-m5", "udid": "<hardware UUID>" }`
-records. Obtain each UUID with `ioreg -rd1 -c IOPlatformExpertDevice` on the target.
+The inventory is a JSON array of `{ "host": "tx-m5", "udid": "<Provisioning UDID>" }`
+records. Obtain each Provisioning UDID with `system_profiler SPHardwareDataType`
+on the target. On Apple Silicon, this differs from the hardware UUID returned
+by `ioreg`; profiles must be checked against the Provisioning UDID.
 The build checks the certificate, expiry, app ID, Keychain groups, and every target
 UUID before installing. A successful shared-Keychain build caches its public
 profile and inventory in `.local/macos/` for subsequent shared-Keychain builds.
@@ -675,25 +686,24 @@ Choose only the vault access and read/write permissions required for your work.
 `envault app --auth service-account` opens this setup screen if no token exists.
 `envault auth store better-env-vault` remains a supported stdin-only alternative.
 
-Desktop fallback uses the existing SDK and account discovery. Install the
-1Password CLI (`op`) for automatic account discovery or specify an account;
-desktop mode requires the desktop app's SDK integration. Existing CLI defaults
-and schema authentication settings are preserved. Credentials are never app
-arguments or preferences:
+Desktop fallback connects through the existing SDK using the account name
+shown in 1Password's sidebar. It needs the desktop app's SDK integration, not
+the `op` CLI. Existing CLI defaults and schema authentication settings are
+preserved. Credentials are never app arguments or preferences:
 
 ```bash
-envault app --auth desktop --account <account-uuid>
+envault app --auth desktop --account "Xiao"
 envault app --auth service-account --service-account-keychain <entry-name>
 envault app --schema /absolute/path/to/.env.schema
 ```
 
 `better-env-vault app` accepts the same options. The app's Open Schema menu supports
-multiple schemas; Browse Vaults returns to vault discovery. Refresh restarts the
-embedded session; the existing UI refresh control reloads vault contents. All
+multiple schemas; Browse Vaults returns to vault browsing. Refresh revalidates
+contents in the existing session. All
 editing, notes, search, masking, and schema resolution use the same UI and core
 as the CLI server. Schema mode reads authentication settings from each schema.
-App options and selected schemas are intentionally not persisted. Service-account
-credentials persist only in Keychain.
+Selected schemas and browser state are not persisted. Native account names are
+saved as metadata for the next launch; service-account credentials stay in Keychain.
 
 The shell starts its bundled server on a random IPv4 loopback port. A one-use
 per-launch bootstrap credential travels through anonymous pipes and a document
@@ -711,14 +721,26 @@ Closing the last window retains the workspace in RAM for immediate reopening.
 Quit (⌘Q) terminates and reaps every active and cached server. Pipe closure
 and parent-process monitoring also stop it if the shell disappears unexpectedly.
 
-The Source selector and Accounts menu support multiple named service accounts,
+The bundled runtime permits loading 1Password's separately signed desktop SDK
+library. Before starting a desktop session, the app verifies that library against
+1Password's Apple signing team. The native shell keeps library validation enabled.
+
+The compact Source switcher in the top-right title bar and Accounts menu support multiple named service accounts,
 individual desktop accounts, and the current schema workspace. ⌘1–9 select the
 first nine entries; additional entries remain available in the menu. Add Service
 Account stores a separate named token through the existing native Keychain path.
-Add Desktop Account accepts an account UUID/name when automatic `op` metadata
-discovery is unavailable. Account discovery runs after the UI starts. A selected
+Add Desktop Account accepts the account name shown in the 1Password sidebar.
+If no saved token or account name is configured, a native account-name prompt
+connects through the SDK directly, without requiring the `op` CLI. Only these
+native account names are saved in `~/Library/Application Support/Better Env Vault/desktop-accounts.json`;
+no credentials, browser payloads, or vault contents are saved there. The native app does not invoke the 1Password CLI for account discovery; the CLI
+commands retain their existing automatic discovery behavior. Account selection never blocks the initial native window. A selected
 identity never silently falls back to another identity. Pending saves block source
 changes; unsaved drafts require confirmation before discarding.
+
+The custom Dock/Finder icon is generated from `scripts/macos/icon.swift`. Run
+`npm run app:icon` to reproduce the PNG master; the app build packages every
+required icon size into `AppIcon.icns`.
 
 The app follows system light/dark appearance live, including grids and JSON editors.
 No theme preference is saved. Up to four inactive source workspaces retain their
@@ -738,7 +760,7 @@ without outputting any vault names, tokens, values, or browser payloads:
 ```bash
 npm run app:verify
 # Verify a live source switch too:
-# npm run app:verify -- --verify-source desktop:<account-uuid>
+# After adding a desktop account: npm run app:verify -- --verify-source desktop:Xiao
 # Exercise inherited SDK session → named Keychain source without another token:
 op-agent run --no-masking -- npm run app:verify -- --inherited-session --verify-source service:better-env-vault
 # Or: npm run app:verify -- --account <account-uuid>

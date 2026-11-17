@@ -84,3 +84,21 @@ it("sanitizes account metadata and excludes URL credentials and query payloads",
     ).some((s) => s.id.includes("invalid")),
   ).toBe(false);
 });
+
+it("restores native account names independently of the optional op CLI metadata", () => {
+  const sources = appSources(
+    {
+      schemas: [],
+      desktopAccounts: ["Xiao", "Work Team"],
+      discovery: { auth: "desktop", account: "Xiao" },
+    },
+    [],
+    [],
+  );
+  expect(
+    sources.find((source) => source.id === "desktop:Xiao")?.discovery,
+  ).toEqual({ auth: "desktop", account: "Xiao" });
+  expect(
+    sources.find((source) => source.id === "desktop:Work Team")?.label,
+  ).toBe("Desktop · Work Team");
+});

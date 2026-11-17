@@ -1,4 +1,8 @@
-import { desktopAccounts } from "../../packages/core/src/discovery.js";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { access } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { appSources, sourceId } from "./sources.js";
 // Private pipe protocol. Credentials enter only through stdin and native Keychain;
 // stdout carries only fixed setup states and the in-memory session handshake.
@@ -17,6 +21,7 @@ const input = createInterface({ input: process.stdin });
 let app: Awaited<ReturnType<typeof startServer>> | undefined;
 let config: AppConfiguration | undefined;
 let awaitingToken = false;
+let awaitingDesktopAccount = false;
 let stopping = false;
 async function stop() {
   if (stopping) return;
@@ -47,7 +52,37 @@ function setup(error = false) {
     }) + "\n",
   );
 }
+async function verifyDesktopLibrary() {
+  // The SDK loads this vendor-signed addon from 1Password itself. Node's
+  // library-validation exception is scoped to its runtime, never the native shell.
+  const relative =
+    "1Password.app/Contents/Frameworks/libop_sdk_ipc_client.dylib";
+  for (const path of [
+    join("/Applications", relative),
+    join(homedir(), "Applications", relative),
+  ]) {
+    try {
+      await access(path);
+    } catch {
+      continue;
+    }
+    await promisify(execFile)(
+      "/usr/bin/codesign",
+      [
+        "--verify",
+        "--strict",
+        "-R",
+        '=anchor apple generic and certificate leaf[subject.OU] = "2BUA8C4S2C"',
+        path,
+      ],
+      { timeout: 10_000, maxBuffer: 4096 },
+    );
+    return;
+  }
+}
 async function start() {
+  if (config!.discovery?.auth === "desktop" || config!.schemas.length)
+    await verifyDesktopLibrary();
   app = await startServer({ ...config!, port: 0 });
   if (stopping) {
     await app.close();
@@ -61,17 +96,6 @@ async function start() {
       sources: appSources(config!, config!.sourceNames ?? [], []),
     }) + "\n",
   );
-  if (!config!.configureServiceAccount) {
-    void desktopAccounts().then((accounts) => {
-      if (!stopping && accounts.length)
-        process.stdout.write(
-          JSON.stringify({
-            selectedSource: sourceId(config!),
-            sources: appSources(config!, config!.sourceNames ?? [], accounts),
-          }) + "\n",
-        );
-    });
-  }
 }
 // Serialize messages so repeated submissions cannot start concurrent servers.
 let pending = Promise.resolve();
@@ -87,7 +111,39 @@ input.on("line", (line) => {
             process.env.BEV_DATA_PROTECTION_SERVICE_ACCOUNT_TOKEN;
         delete process.env.BEV_DATA_PROTECTION_SERVICE_ACCOUNT_TOKEN;
         if (await needsServiceAccountSetup(config)) setup();
-        else await start();
+        else if (
+          !config.schemas.length &&
+          config.discovery?.auth === "desktop" &&
+          !config.discovery.account &&
+          !process.env.OP_ACCOUNT
+        ) {
+          awaitingDesktopAccount = true;
+          process.stdout.write(
+            JSON.stringify({
+              desktopAccountRequired: true,
+              selectedSource: sourceId(config),
+              sources: appSources(config, config.sourceNames ?? [], []),
+            }) + "\n",
+          );
+        } else await start();
+      } else if (awaitingDesktopAccount) {
+        const data = JSON.parse(line) as { desktopAccount?: unknown };
+        const account = data.desktopAccount;
+        if (
+          typeof account !== "string" ||
+          !account.trim() ||
+          account.length > 128 ||
+          /[\r\n\0]/.test(account) ||
+          account.startsWith("ops_") ||
+          account.startsWith("A3-")
+        )
+          process.exit(1);
+        config.discovery = { auth: "desktop", account: account.trim() };
+        config.desktopAccounts = [
+          ...new Set([...(config.desktopAccounts ?? []), account.trim()]),
+        ];
+        awaitingDesktopAccount = false;
+        await start();
       } else if (awaitingToken) {
         const data = JSON.parse(line) as { serviceAccountToken?: unknown };
         if (typeof data.serviceAccountToken !== "string") {

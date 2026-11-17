@@ -31,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
   var nextGeneration = 0
   var refreshedAt = Date()
   var warm: [String: WarmWorkspace] = [:]
+  var retiring: [Process] = []
   var quitting = false
   var verifying = CommandLine.arguments.contains("--verify")
   var verified = false
@@ -50,6 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
   var connectionFailed = false
   var sources: [AppSource] = []
   var selectedSource = ""
+  var desktopAccounts: [String] = []
   let sourcePicker = NSPopUpButton(frame: .zero, pullsDown: false)
   let sourceMenu = NSMenu(title: "Accounts")
 
@@ -72,6 +74,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     window.isRestorable = false
     window.isReleasedWhenClosed = false
     window.center()
+    // A compact account switcher shares the existing title bar, not the workspace.
+    let accountAccessory = NSTitlebarAccessoryViewController()
+    accountAccessory.layoutAttribute = .right
+    let accountView = NSView(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
+    sourcePicker.frame = NSRect(x: 0, y: 1, width: 208, height: 22)
+    sourcePicker.controlSize = .small
+    sourcePicker.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+    sourcePicker.cell?.lineBreakMode = .byTruncatingTail
+    sourcePicker.image = NSImage(
+      systemSymbolName: "person.crop.circle", accessibilityDescription: nil)
+    sourcePicker.imagePosition = .imageLeading
+    accountView.addSubview(sourcePicker)
+    accountAccessory.view = accountView
+    window.addTitlebarAccessoryViewController(accountAccessory)
     let menu = NSMenu()
     let appItem = NSMenuItem()
     menu.addItem(appItem)
@@ -143,6 +159,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
       }
       index += 2
     }
+    loadDesktopAccounts()
+    if !verifying, discovery["auth"] == "desktop", let account = discovery["account"] {
+      rememberDesktopAccount(account)
+    }
+    if schemas.isEmpty, discovery["account"] == nil,
+      discovery["serviceAccountKeychain"] == nil, discovery["auth"] != "service-account",
+      discovery["auth"] == "desktop" || !storedSourceNames().contains("better-env-vault"),
+      let account = desktopAccounts.last
+    {
+      discovery = ["auth": "desktop", "account": account]
+    }
     if verifying {
       FileHandle.standardOutput.write(Data("APP_VERIFICATION_PID \(getpid())\n".utf8))
     }
@@ -152,29 +179,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
   }
 
   func showContent(_ view: NSView) {
-    let root = NSView(
-      frame: window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 1280, height: 820))
-    let bar = NSStackView()
-    bar.orientation = .horizontal
-    bar.spacing = 10
-    bar.translatesAutoresizingMaskIntoConstraints = false
-    bar.addArrangedSubview(NSTextField(labelWithString: "Source"))
-    bar.addArrangedSubview(sourcePicker)
-    root.addSubview(bar)
-    view.translatesAutoresizingMaskIntoConstraints = false
-    root.addSubview(view)
-    NSLayoutConstraint.activate([
-      bar.topAnchor.constraint(equalTo: root.topAnchor, constant: 10),
-      bar.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
-      bar.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -16),
-      bar.heightAnchor.constraint(equalToConstant: 30),
-      sourcePicker.widthAnchor.constraint(lessThanOrEqualToConstant: 700),
-      view.topAnchor.constraint(equalTo: bar.bottomAnchor, constant: 10),
-      view.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-      view.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-      view.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-    ])
-    window.contentView = root
+    view.frame = window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 1280, height: 820)
+    view.autoresizingMask = [.width, .height]
+    window.contentView = view
   }
 
   func storedSourceNames() -> [String] {
@@ -289,6 +296,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     }
   }
   func chooseSource(_ id: String) {
+    if id == "desktop:auto" {
+      addDesktopAccount()
+      return
+    }
     guard id != selectedSource, let source = sources.first(where: { $0.id == id }) else { return }
     allowSourceChange { [weak self] in
       guard let self else { return }
@@ -303,7 +314,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
       if !self.restoreWorkspace(source.id) { self.start() }
     }
   }
-  func askForSourceName(title: String, placeholder: String) -> String? {
+  func askForSourceName(title: String, placeholder: String, identifier: Bool = true) -> String? {
     let alert = NSAlert()
     alert.messageText = title
     let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 26))
@@ -313,7 +324,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     alert.addButton(withTitle: "Continue")
     guard alert.runModal() == .alertSecondButtonReturn else { return nil }
     let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard value.range(of: "^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$", options: .regularExpression) != nil,
+    guard !value.isEmpty, value.count <= 128,
+      !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),
+      !identifier
+        || value.range(of: "^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$", options: .regularExpression)
+          != nil,
       !value.hasPrefix("ops_"), !value.hasPrefix("A3-")
     else { return nil }
     return value
@@ -333,12 +348,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     allowSourceChange { [weak self] in
       guard let self,
         let name = self.askForSourceName(
-          title: "Choose a desktop account", placeholder: "1Password account UUID or name")
+          title: "Choose a desktop account",
+          placeholder: "Account name shown in 1Password, for example Xiao", identifier: false)
       else { return }
       self.schemas = []
       self.discovery = ["auth": "desktop", "account": name]
+      self.rememberDesktopAccount(name)
       self.start()
     }
+  }
+
+  var desktopAccountsURL: URL {
+    FileManager.default.homeDirectoryForCurrentUser
+      .appendingPathComponent("Library/Application Support/Better Env Vault/desktop-accounts.json")
+  }
+  func loadDesktopAccounts() {
+    guard let data = try? Data(contentsOf: desktopAccountsURL), data.count <= 16384,
+      let names = try? JSONDecoder().decode([String].self, from: data), names.count <= 100
+    else { return }
+    desktopAccounts = names.filter {
+      !$0.isEmpty && $0.count <= 128 && !$0.hasPrefix("ops_") && !$0.hasPrefix("A3-")
+        && !$0.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
+    }
+  }
+  func rememberDesktopAccount(_ name: String) {
+    guard !verifying, !name.isEmpty, name.count <= 128,
+      !name.hasPrefix("ops_"), !name.hasPrefix("A3-"),
+      !name.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
+    else { return }
+    desktopAccounts.removeAll(where: { $0 == name })
+    desktopAccounts.append(name)
+    // Native account names only; no SDK/browser payload, token, or vault data is persisted.
+    do {
+      try FileManager.default.createDirectory(
+        at: desktopAccountsURL.deletingLastPathComponent(),
+        withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+      try JSONEncoder().encode(desktopAccounts).write(to: desktopAccountsURL, options: .atomic)
+      try FileManager.default.setAttributes(
+        [.posixPermissions: 0o600], ofItemAtPath: desktopAccountsURL.path)
+    } catch {
+      // Account selection still works in RAM if metadata cannot be saved.
+    }
+  }
+  func showDesktopAccountSetup() {
+    status("Choose the account name shown in the 1Password sidebar to connect through the SDK.")
+    if verifying {
+      verificationState = "DESKTOP_ACCOUNT_REQUIRED"
+      finishVerification(false)
+      return
+    }
+    guard
+      let name = askForSourceName(
+        title: "Connect a 1Password desktop account",
+        placeholder: "Account name shown in 1Password, for example Xiao", identifier: false),
+      let pipe = input,
+      let data = try? JSONSerialization.data(withJSONObject: ["desktopAccount": name])
+    else { return }
+    rememberDesktopAccount(name)
+    discovery = ["auth": "desktop", "account": name]
+    pipe.fileHandleForWriting.write(data + Data([10]))
   }
 
   func status(_ text: String) {
@@ -405,11 +473,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     workspace.input.fileHandleForWriting.closeFile()
     if workspace.child.isRunning { workspace.child.terminate() }
     let process = workspace.child
-    DispatchQueue.global().async {
+    retiring.append(process)
+    DispatchQueue.global().async { [weak self] in
       let deadline = Date().addingTimeInterval(2)
       while process.isRunning && Date() < deadline { usleep(10_000) }
       if process.isRunning { kill(process.processIdentifier, SIGKILL) }
       process.waitUntilExit()
+      DispatchQueue.main.async { [weak self] in
+        self?.retiring.removeAll(where: { $0 === process })
+      }
     }
   }
 
@@ -715,9 +787,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         schemas.isEmpty
         ? [
           "schemas": [], "discovery": discovery, "configureServiceAccount": configureServiceAccount,
-          "sourceNames": storedSourceNames(),
+          "sourceNames": storedSourceNames(), "desktopAccounts": desktopAccounts,
         ]
-        : ["schemas": schemas, "sourceNames": storedSourceNames()]
+        : [
+          "schemas": schemas, "sourceNames": storedSourceNames(),
+          "desktopAccounts": desktopAccounts,
+        ]
       let data = try JSONSerialization.data(withJSONObject: config)
       try process.run()
       outgoing.fileHandleForWriting.closeFile()
@@ -741,6 +816,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
           DispatchQueue.main.async {
             guard let self, self.generation == current else { return }
             self.updateSources(record)
+            if record["desktopAccountRequired"] as? Bool == true {
+              self.showDesktopAccountSetup()
+              return
+            }
             if record["sources"] != nil && record["url"] == nil && record["setupRequired"] == nil {
               return
             }
@@ -827,7 +906,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
   func verifyUI(attempt: Int) {
     guard verifying, !verified, let view = web else { return }
     let menuItems = sourceMenu.items.filter { $0.representedObject is String }
-    guard !sources.isEmpty, menuItems.count == sources.count,
+    guard window.titlebarAccessoryViewControllers.count == 1,
+      sourcePicker.superview === window.titlebarAccessoryViewControllers.first?.view,
+      sourcePicker.frame.width <= 220,
+      !sources.isEmpty, menuItems.count == sources.count,
       menuItems.enumerated().allSatisfy({
         $0.element.keyEquivalent == ($0.offset < 9 ? String($0.offset + 1) : "")
       }),
@@ -852,7 +934,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
             const matrix = await fetch('/api/matrix?project=' + encodeURIComponent(data.projects[0].id));
             if (!matrix.ok) return 'INVENTORY_UNAVAILABLE';
           }
-            return document.querySelectorAll('button').length > 0 ? 'OK' : 'UI_UNAVAILABLE';
+          if (data.mode === 'vault') {
+            const refresh = document.querySelector('button[aria-label="Refresh secrets"]');
+            if (!refresh || refresh.disabled) return 'CATALOG_LOADING';
+            if (document.querySelector('.alert.error') &&
+                !document.querySelector('.environment-grid [role="gridcell"]')) return 'CATALOG_UNAVAILABLE';
+            if (!document.querySelector('.environment-grid')) return 'UI_UNAVAILABLE';
+          }
+          return document.querySelectorAll('button').length > 0 ? 'OK' : 'UI_UNAVAILABLE';
         } catch { return "REQUEST_FAILED"; }
       })();
       """
@@ -861,7 +950,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
       if case .success(let value) = result, let state = value as? String,
         [
           "OK", "SESSION_UNAVAILABLE", "INVENTORY_UNAVAILABLE", "INVENTORY_EMPTY", "UI_UNAVAILABLE",
-          "REQUEST_FAILED",
+          "REQUEST_FAILED", "CATALOG_UNAVAILABLE", "CATALOG_LOADING",
         ].contains(state)
       {
         self.verificationState = state
@@ -919,12 +1008,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
             return
           }
           let source = self.selectedSource
+          let generation = self.nextGeneration
           self.warmVerified = true
           let start = ProcessInfo.processInfo.systemUptime
           self.parkWorkspace()
           self.window.close()
           _ = self.applicationShouldHandleReopen(NSApplication.shared, hasVisibleWindows: false)
-          guard self.restoreWorkspace(source), self.web === view,
+          guard self.nextGeneration == generation, self.restoreWorkspace(source), self.web === view,
             self.child === process, self.origin == origin, process.isRunning,
             ProcessInfo.processInfo.systemUptime - start < 0.5
           else {
@@ -938,6 +1028,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         self.finishVerification(true)
       } else if self.verificationState == "INVENTORY_UNAVAILABLE"
         || self.verificationState == "INVENTORY_EMPTY"
+        || self.verificationState == "CATALOG_UNAVAILABLE"
       {
         self.finishVerification(false)
       } else if attempt < 60 {
@@ -965,7 +1056,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
   func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool
   {
     window.makeKeyAndOrderFront(nil)
-    refresh()
+    if web != nil && Date().timeIntervalSince(refreshedAt) > 30 { refresh() }
     return true
   }
   func applicationWillTerminate(_ notification: Notification) {
@@ -973,16 +1064,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     // Signal all parked children before waiting, so Quit has one bounded deadline.
     let cached = Array(warm.values)
     warm.removeAll()
-    for workspace in cached {
-      workspace.input.fileHandleForWriting.closeFile()
-      if workspace.child.isRunning { workspace.child.terminate() }
-    }
+    let children = cached.map(\.child) + retiring
+    retiring.removeAll()
+    for workspace in cached { workspace.input.fileHandleForWriting.closeFile() }
+    for process in children where process.isRunning { process.terminate() }
     stop()
     let deadline = Date().addingTimeInterval(2)
-    for workspace in cached {
-      while workspace.child.isRunning && Date() < deadline { usleep(10_000) }
-      if workspace.child.isRunning { kill(workspace.child.processIdentifier, SIGKILL) }
-      workspace.child.waitUntilExit()
+    for process in children {
+      while process.isRunning && Date() < deadline { usleep(10_000) }
+      if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+      process.waitUntilExit()
     }
     if connectionPath != nil { exit(connectionFailed ? 1 : 0) }
     if verifying { exit(verificationSucceeded ? 0 : 1) }

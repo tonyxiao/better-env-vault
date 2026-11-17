@@ -48,6 +48,19 @@ export function appSources(
       schemas: [],
       discovery: { auth: "service-account", serviceAccountKeychain: name },
     });
+  for (const account of config.desktopAccounts ?? [])
+    if (
+      account.length <= 128 &&
+      !/[\r\n\0]/.test(account) &&
+      !account.startsWith("ops_") &&
+      !account.startsWith("A3-")
+    )
+      add({
+        id: `desktop:${account}`,
+        label: `Desktop · ${account}`,
+        schemas: [],
+        discovery: { auth: "desktop", account },
+      });
   for (const account of accounts)
     add({
       id: `desktop:${account.id}`,
@@ -66,13 +79,16 @@ export function appSources(
       discovery: config.discovery,
     });
   }
-  if (selected.startsWith("desktop:") || !accounts.length)
+  if (
+    selected.startsWith("desktop:") ||
+    (!accounts.length && !config.desktopAccounts?.length)
+  )
     add({
       id: selected.startsWith("desktop:") ? selected : "desktop:auto",
       label:
         config.discovery?.auth === "desktop" && config.discovery.account
           ? `Desktop · ${config.discovery.account}`
-          : "Desktop · All accounts",
+          : "Desktop · Choose Account…",
       schemas: [],
       discovery: {
         auth: "desktop",

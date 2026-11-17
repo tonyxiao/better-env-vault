@@ -125,3 +125,35 @@ it("keeps credential setup on private pipes, rejects invalid input without echoi
   await exited;
   expect(stderr).toBe("");
 });
+
+it("asks for a native desktop account name without requiring CLI discovery or a token", async () => {
+  const child = spawn(
+    process.execPath,
+    ["--disable-warning=DEP0205", "--import", "tsx", "apps/macos/server.ts"],
+    {
+      cwd: resolve(import.meta.dirname, ".."),
+      env: { PATH: "/usr/bin:/bin" },
+      stdio: ["pipe", "pipe", "pipe"],
+    },
+  );
+  children.push(child);
+  let stderr = "";
+  child.stderr!.on("data", (part) => (stderr += part));
+  const lines = createInterface({ input: child.stdout! });
+  const ready = once(lines, "line");
+  child.stdin!.write(
+    JSON.stringify({ schemas: [], discovery: { auth: "desktop" } }) + "\n",
+  );
+  const record = JSON.parse((await ready)[0]);
+  expect(record.desktopAccountRequired).toBe(true);
+  expect(record.url).toBeUndefined();
+  expect(
+    record.sources.find(
+      (source: { id: string }) => source.id === "desktop:auto",
+    ).label,
+  ).toBe("Desktop · Choose Account…");
+  const exited = once(child, "exit");
+  child.stdin!.end();
+  await exited;
+  expect(stderr).toBe("");
+});

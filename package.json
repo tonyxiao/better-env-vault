@@ -36,7 +36,8 @@
     "test:vault-stream": "tsx scripts/test-vault-stream.ts",
     "test:vault-notes": "tsx scripts/test-vault-notes.ts",
     "test:keyboard": "tsx scripts/test-keyboard.ts",
-    "app:deploy": "node scripts/macos/deploy.mjs"
+    "app:deploy": "node scripts/macos/deploy.mjs",
+    "app:icon": "xcrun swift scripts/macos/icon.swift apps/macos/assets/AppIcon.png"
   },
   "engines": {
     "node": ">=22"

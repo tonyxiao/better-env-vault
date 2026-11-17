@@ -5,6 +5,7 @@ export const appKeychainEntry = "better-env-vault";
 export interface AppConfiguration {
   schemas: string[];
   sourceNames?: string[];
+  desktopAccounts?: string[];
   discovery?: DiscoveryOptions;
   configureServiceAccount?: boolean;
   useDataProtectionToken?: boolean;
