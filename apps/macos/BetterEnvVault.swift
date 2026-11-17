@@ -21,6 +21,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
   var discovery: [String: String] = [:]
   var tokenField: NSSecureTextField?
   var connectButton: NSButton?
+  var connectionPath: String?
+  var connectionHandle: FileHandle?
+  var pendingConnectionToken: String?
+  var connectionFailed = false
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     var limit = rlimit(rlim_cur: 0, rlim_max: 0)
@@ -84,6 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
       }
       let value = args[index + 1]
       switch flag {
+      case "--connect-socket": connectionPath = value
       case "--schema": schemas.append(value)
       case "--auth":
         guard ["desktop", "service-account"].contains(value) else {
@@ -99,9 +104,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
       }
       index += 2
     }
+    if verifying {
+      FileHandle.standardOutput.write(Data("APP_VERIFICATION_PID \(getpid())\n".utf8))
+    }
     window.makeKeyAndOrderFront(nil)
     NSApplication.shared.activate(ignoringOtherApps: true)
-    start()
+    if let path = connectionPath { receiveConnection(path) } else { start() }
   }
 
   func status(_ text: String) {
@@ -116,7 +124,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
   func fail() {
     status(
       "Unable to open Better Env Vault. Check 1Password authorization, then use Refresh to retry.")
-    if verifying { finishVerification(false) }
+    if connectionPath != nil {
+      finishConnection(false)
+    } else if verifying {
+      finishVerification(false)
+    }
   }
 
   func stop() {
@@ -165,6 +177,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
   }
 
   func showServiceAccountSetup(error: Bool = false) {
+    if connectionPath != nil {
+      guard !error, let token = pendingConnectionToken, let pipe = input else {
+        finishConnection(false)
+        return
+      }
+      pendingConnectionToken = nil
+      do {
+        var data = try JSONSerialization.data(withJSONObject: ["serviceAccountToken": token])
+        defer { data.resetBytes(in: 0..<data.count) }
+        data.append(10)
+        try pipe.fileHandleForWriting.write(contentsOf: data)
+      } catch { finishConnection(false) }
+      return
+    }
     if verifying {
       verificationState = "SERVICE_ACCOUNT_REQUIRED"
       finishVerification(false)
@@ -239,9 +265,87 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     }
   }
 
+  // An owner-only Unix socket lets the signed installer supply a token directly
+  // to this GUI process. Tokens never enter arguments, URLs, or files.
+  func receiveConnection(_ path: String) {
+    status("Connecting service account…")
+    discovery["auth"] = "service-account"
+    DispatchQueue.global().async { [weak self] in
+      do {
+        let attributes = try FileManager.default.attributesOfItem(atPath: path)
+        guard attributes[.type] as? FileAttributeType == .typeSocket,
+          (attributes[.ownerAccountID] as? NSNumber)?.uint32Value == getuid(),
+          ((attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0) & 0o077 == 0
+        else { throw NSError(domain: "Connection", code: 1) }
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw NSError(domain: "Connection", code: 1) }
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let bytes = Array(path.utf8CString)
+        guard bytes.count <= MemoryLayout.size(ofValue: address.sun_path) else {
+          close(fd)
+          throw NSError(domain: "Connection", code: 1)
+        }
+        _ = withUnsafeMutablePointer(to: &address.sun_path) { pointer in
+          bytes.withUnsafeBufferPointer { source in
+            memcpy(pointer, source.baseAddress!, bytes.count)
+          }
+        }
+        let result = withUnsafePointer(to: &address) { pointer in
+          pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+          }
+        }
+        guard result == 0 else {
+          close(fd)
+          throw NSError(domain: "Connection", code: 1)
+        }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        var data = Data()
+        while true {
+          let chunk = handle.readData(ofLength: 4096)
+          if chunk.isEmpty { break }
+          data.append(chunk)
+          guard data.count <= 65536 else {
+            handle.closeFile()
+            throw NSError(domain: "Connection", code: 1)
+          }
+        }
+        defer { data.resetBytes(in: 0..<data.count) }
+        guard let token = String(data: data, encoding: .utf8), token.hasPrefix("ops_") else {
+          handle.closeFile()
+          throw NSError(domain: "Connection", code: 1)
+        }
+        DispatchQueue.main.async {
+          guard let self else {
+            handle.closeFile()
+            return
+          }
+          self.connectionHandle = handle
+          self.pendingConnectionToken = token
+          self.start(configureServiceAccount: true)
+        }
+      } catch { DispatchQueue.main.async { self?.finishConnection(false) } }
+    }
+  }
+
+  func finishConnection(_ success: Bool) {
+    connectionFailed = !success
+    try? connectionHandle?.write(contentsOf: Data((success ? "OK" : "ERROR").utf8))
+    connectionHandle?.closeFile()
+    connectionHandle = nil
+    pendingConnectionToken = nil
+    NSApplication.shared.terminate(nil)
+  }
+
   // Existing headless service account, shared by the signed tools on this Mac.
   // Query only this exact item; never enumerate credentials or expose a JS bridge.
   func dataProtectionServiceAccountToken() -> String? {
+    guard let task = SecTaskCreateFromSelf(nil),
+      let groups = SecTaskCopyValueForEntitlement(task, "keychain-access-groups" as CFString, nil)
+        as? [String],
+      groups.contains("H82Z395PDV.com.tonyxiao.codex-keychain-helper")
+    else { return nil }
     let query: [String: Any] = [
       kSecClass as String: kSecClassGenericPassword,
       kSecAttrService as String: "1Password Service Account Token",
@@ -345,6 +449,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
             }
             self.tokenField = nil
             self.connectButton = nil
+            if self.connectionPath != nil {
+              self.finishConnection(true)
+              return
+            }
             self.load(url, bootstrap: bootstrap)
           }
         }
@@ -456,6 +564,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
   func applicationWillTerminate(_ notification: Notification) {
     quitting = true
     stop()
+    if connectionPath != nil { exit(connectionFailed ? 1 : 0) }
     if verifying { exit(verificationSucceeded ? 0 : 1) }
   }
 }

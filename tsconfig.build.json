@@ -3,7 +3,8 @@
   "include": [
     "packages/**/*.ts",
     "apps/web/src/server.ts",
-    "apps/macos/server.ts"
+    "apps/macos/server.ts",
+    "scripts/macos/profile.ts"
   ],
-  "exclude": ["tests", "scripts", "apps/web/src/main.tsx"]
+  "exclude": ["tests", "apps/web/src/main.tsx"]
 }

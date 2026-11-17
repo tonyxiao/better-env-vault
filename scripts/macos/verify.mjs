@@ -1,8 +1,9 @@
 // Runs the installed WebKit app. All browser payloads remain inside WebKit.
 import { spawn, execFileSync } from "node:child_process";
-import { access } from "node:fs/promises";
+import { access, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { createConnection } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -32,33 +33,54 @@ for (const path of storage)
 execFileSync("codesign", ["--verify", "--deep", "--strict", bundle], {
   stdio: "ignore",
 });
+// LaunchServices provides the real GUI security session. Direct execution over
+// SSH can be denied access to the user's login keychain despite a working GUI.
+// The status artifact contains only fixed enums and a PID, never browser data.
+const statusDirectory = resolve("tmp/macos");
+await mkdir(statusDirectory, { recursive: true, mode: 0o700 });
+const statusPath = join(
+  statusDirectory,
+  `verify-${randomBytes(6).toString("hex")}.status`,
+);
+await writeFile(statusPath, "", { mode: 0o600 });
 const child = spawn(
-  join(bundle, "Contents/MacOS/BetterEnvVault"),
-  ["--verify", ...process.argv.slice(2)],
-  {
-    stdio: ["ignore", "pipe", "ignore"],
-  },
+  "/usr/bin/open",
+  [
+    "-n",
+    "-W",
+    "--stdout",
+    statusPath,
+    "--stderr",
+    "/dev/null",
+    bundle,
+    "--args",
+    "--verify",
+    ...process.argv.slice(2),
+  ],
+  { stdio: "ignore" },
 );
 let marker = "";
-child.stdout.on("data", (data) => {
-  if (marker.length < 1024) marker += data.toString();
-});
-let exitCode;
+let nativePid;
 let ended = false;
-child.once("exit", (code) => {
-  exitCode = code;
+child.once("exit", () => {
   ended = true;
 });
 child.once("error", () => {
   ended = true;
-  exitCode = 1;
 });
 const serverPids = new Set();
 const ports = new Set();
 const deadline = Date.now() + 100_000;
-while (!ended && Date.now() < deadline) {
+while (Date.now() < deadline) {
+  marker = (await readFile(statusPath, "utf8")).slice(0, 2048);
+  nativePid = marker.match(/^APP_VERIFICATION_PID (\d+)$/m)?.[1];
+  if (ended) break;
+  if (!nativePid) {
+    await delay(200);
+    continue;
+  }
   try {
-    const pids = execFileSync("pgrep", ["-P", String(child.pid)], {
+    const pids = execFileSync("pgrep", ["-P", nativePid], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     })
@@ -91,9 +113,21 @@ while (!ended && Date.now() < deadline) {
   await delay(200);
 }
 if (!ended) {
+  if (nativePid) {
+    try {
+      process.kill(Number(nativePid), "SIGTERM");
+    } catch {}
+  }
   child.kill("SIGTERM");
+  await unlink(statusPath).catch(() => {});
   throw new Error("Installed application verification timed out.");
 }
+marker = (await readFile(statusPath, "utf8"))
+  .replace(/^APP_VERIFICATION_PID \d+\s*$/m, "")
+  .trim();
+await unlink(statusPath);
+if (!nativePid)
+  throw new Error("The installed app did not start in the GUI session.");
 for (const pid of serverPids) {
   let running = false;
   try {
@@ -116,7 +150,11 @@ for (const port of ports) {
   if (listening)
     throw new Error("The app loopback port remained open after exit.");
 }
-if (!ports.size) throw new Error("No embedded loopback listener was observed.");
+if (
+  !ports.size &&
+  marker !== "APP_VERIFICATION_FAILED: SERVICE_ACCOUNT_REQUIRED"
+)
+  throw new Error("No embedded loopback listener was observed.");
 for (const path of storage)
   if (await exists(path))
     throw new Error("App-specific persistent storage was created.");
@@ -125,7 +163,7 @@ console.log(
     ? "SIGNATURE_LOOPBACK_SHUTDOWN_AND_STORAGE_OK"
     : "SIGNATURE_SETUP_SHUTDOWN_AND_STORAGE_OK",
 );
-if (exitCode === 0 && marker.trim() === "UI_AND_AUTHENTICATED_INVENTORY_OK") {
+if (marker.trim() === "UI_AND_AUTHENTICATED_INVENTORY_OK") {
   console.log("UI_AND_AUTHENTICATED_INVENTORY_OK");
 } else {
   // Only permit fixed diagnostic enums, never arbitrary application output.

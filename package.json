@@ -17,6 +17,7 @@
     "app:build": "node scripts/macos/build.mjs",
     "app:install": "node scripts/macos/build.mjs --install",
     "app:verify": "node scripts/macos/verify.mjs",
+    "app:connect": "node scripts/macos/connect.mjs",
     "build": "tsc -p tsconfig.build.json && vite build --config apps/web/vite.config.ts",
     "typecheck": "tsc --noEmit && tsc -p apps/web/tsconfig.json --noEmit",
     "test": "vitest run",

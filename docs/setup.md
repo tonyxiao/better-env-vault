@@ -590,8 +590,7 @@ refresh before editing again.
 ## Native macOS application
 
 From this stable checkout, with Xcode Command Line Tools and the installed signing
-identity `Apple Development: Tony Xiao (9QULCFJ59K)`, plus a valid wildcard macOS
-development provisioning profile for team `H82Z395PDV`, run:
+identity `Apple Development: Tony Xiao (9QULCFJ59K)`, run:
 
 ```bash
 npm ci
@@ -610,21 +609,53 @@ host architecture, compiled TypeScript, and the production React assets. The
 installed app needs neither global Node nor this checkout. Rebuild separately on
 Apple Silicon and Intel for those respective architectures. Keep the bundled
 Node version and both pinned checksums current when applying runtime updates.
-The build finds a valid wildcard development profile in Xcode's provisioning-profile
-directories, or reuses the public profile embedded in the installed Codex Keychain
-Helper on this Mac. It embeds that profile and signs the app's Data Protection
-Keychain entitlements. It fails clearly if no suitable profile is available.
-The installed app does not invoke or depend on the helper.
+The standard signed build uses the same macOS Keychain implementation as
+`envault auth`. It has no shared-Keychain entitlement or embedded development
+profile, so the same architecture's signed app can be copied to your other Macs.
+Each Mac keeps its own app credential in Keychain. Use the native Service Account
+screen, or provision the installed signed app directly from the existing headless
+credential without placing its value in arguments, logs, or files:
+
+```bash
+op-agent run --no-masking -- npm run app:connect
+op-agent run --no-masking -- npm run app:connect -- tx-m5
+```
+
+The command verifies the installed signature and sends the token through an
+anonymous pipe and an owner-only Unix socket to the GUI app. The GUI process uses
+the existing core to save it as `better-env-vault` in macOS Keychain, then quits.
+Running storage in the GUI session supports the normal Keychain unlock/approval
+flow; an SSH process alone may be denied access to the login keychain. The app
+runs directly through the SDK after this one-time setup and does not depend on
+`op-agent`, `op`, global Node, or the 1Password desktop app for service-account use.
+The original headless Data Protection credential remains available to its tools.
+
+Shared Data Protection access is an optional build capability. Such a build needs
+a development profile containing every target Mac, the required signing certificate,
+and both Keychain groups. Copying a source-only profile causes macOS to terminate
+the app on other Macs before launch. For that capability, explicitly opt in:
+
+```bash
+npm run app:install -- --shared-keychain --profile /path/to/all-macs.provisionprofile --devices-file tmp/macos/devices.json
+```
+
+The inventory is a JSON array of `{ "host": "tx-m5", "udid": "<hardware UUID>" }`
+records. Obtain each UUID with `ioreg -rd1 -c IOPlatformExpertDevice` on the target.
+The build checks the certificate, expiry, app ID, Keychain groups, and every target
+UUID before installing. A successful shared-Keychain build caches its public
+profile and inventory in `.local/macos/` for subsequent shared-Keychain builds.
+There is no ad-hoc signing fallback. The installed app never invokes the helper.
 
 The application opens the existing vault browser and selects authentication in
 this order: an explicit desktop or named Keychain selection, an inherited
 `OP_SERVICE_ACCOUNT_TOKEN`, the app's saved `better-env-vault` Keychain entry,
-the existing Data Protection service-account item, then desktop authentication
+the existing Data Protection service-account item in an opted-in shared-Keychain
+build, then desktop authentication
 when no service-account credential is available. An explicitly selected service
 account never silently falls back to a different identity after an error.
 
 Service-account authentication connects the existing SDK directly to 1Password;
-it needs neither the desktop app nor the `op` CLI. The existing Data Protection
+it needs neither the desktop app nor the `op` CLI. For an opted-in shared-Keychain build, the existing Data Protection
 item is service `1Password Service Account Token`, account `money-redux`, in
 access group `H82Z395PDV.com.tonyxiao.codex-keychain-helper`. The signed native
 shell queries only that exact item without prompting, passes the credential only

@@ -31,11 +31,17 @@ function run(command, args, options = {}) {
 }
 if (process.platform !== "darwin")
   throw new Error("macOS is required to build and sign the app.");
-if (
-  !run("security", ["find-identity", "-v", "-p", "codesigning"]).includes(
-    `"${identity}"`,
-  )
-)
+const identities = run("security", [
+  "find-identity",
+  "-v",
+  "-p",
+  "codesigning",
+]);
+const certificateSha1 = identities
+  .split("\n")
+  .find((line) => line.includes(`"${identity}"`))
+  ?.match(/[A-F0-9]{40}/)?.[0];
+if (!certificateSha1)
   throw new Error(
     `Required signing identity unavailable: ${identity}. No ad-hoc fallback is permitted.`,
   );
@@ -184,74 +190,142 @@ for (const path of nativeFiles) {
     args.push("--entitlements", entitlements);
   run("codesign", [...args, path]);
 }
-// A development profile authorizes Data Protection Keychain access on this Mac.
-// Reuse the installed wildcard profile, never the helper executable or credentials.
-const profileCandidates = [];
-for (const directory of [
-  join(homedir(), "Library/Developer/Xcode/UserData/Provisioning Profiles"),
-  join(homedir(), "Library/MobileDevice/Provisioning Profiles"),
-]) {
-  try {
-    for (const name of await readdir(directory))
-      if (/\.(provisionprofile|mobileprovision)$/.test(name))
-        profileCandidates.push(join(directory, name));
-  } catch {
-    /* Some Xcode installations have only one profile directory. */
-  }
-}
-profileCandidates.push(
-  join(
-    homedir(),
-    "Applications/Codex Keychain Helper.app/Contents/embedded.provisionprofile",
-  ),
-);
-let profile;
-for (const candidate of profileCandidates) {
-  try {
-    const xml = run("security", ["cms", "-D", "-i", candidate]);
-    const entitlementXML = run(
-      "plutil",
-      ["-extract", "Entitlements", "xml1", "-o", "-", "--", "-"],
-      { input: xml },
-    );
-    const ent = JSON.parse(
-      run("plutil", ["-convert", "json", "-o", "-", "--", "-"], {
-        input: entitlementXML,
-      }),
-    );
-    const expiry = run(
-      "plutil",
-      ["-extract", "ExpirationDate", "raw", "-o", "-", "--", "-"],
-      { input: xml },
-    ).trim();
-    if (
-      ent?.["com.apple.application-identifier"] === "H82Z395PDV.*" &&
-      ent["keychain-access-groups"]?.includes("H82Z395PDV.*") &&
-      Date.parse(expiry) > Date.now()
-    ) {
-      profile = candidate;
-      break;
-    }
-  } catch {
-    /* Ignore invalid or unrelated profiles. */
-  }
-}
-if (!profile)
-  throw new Error(
-    "A valid H82Z395PDV wildcard macOS development provisioning profile is required for Data Protection Keychain access. Install one through Xcode and rebuild.",
-  );
-await cp(profile, join(contents, "embedded.provisionprofile"));
+// The standard build uses envault's existing Keychain implementation and is
+// portable across Macs. Shared Data Protection access is an optional capability
+// that requires an Apple profile covering every deployment device.
+const sharedKeychain = process.argv.includes("--shared-keychain");
 const appEntitlements = join(output, "app-entitlements.plist");
-await writeFile(
-  appEntitlements,
-  `<?xml version="1.0"?><plist version="1.0"><dict>
+if (sharedKeychain) {
+  // A development profile authorizes Data Protection Keychain access on this Mac.
+  // Reuse the installed wildcard profile, never the helper executable or credentials.
+  const argument = (name) => {
+    const index = process.argv.indexOf(name);
+    if (index < 0) return undefined;
+    if (!process.argv[index + 1]) throw new Error(`Missing value for ${name}.`);
+    return resolve(process.argv[index + 1]);
+  };
+  const requestedProfile = argument("--profile");
+  const profileCandidates = requestedProfile
+    ? [requestedProfile]
+    : [join(output, "all-macs.provisionprofile")];
+
+  for (const directory of [
+    join(homedir(), "Library/Developer/Xcode/UserData/Provisioning Profiles"),
+    join(homedir(), "Library/MobileDevice/Provisioning Profiles"),
+  ]) {
+    try {
+      for (const name of await readdir(directory))
+        if (/\.(provisionprofile|mobileprovision)$/.test(name))
+          if (!requestedProfile) profileCandidates.push(join(directory, name));
+    } catch {
+      /* Some Xcode installations have only one profile directory. */
+    }
+  }
+  if (!requestedProfile)
+    profileCandidates.push(
+      join(
+        homedir(),
+        "Applications/Codex Keychain Helper.app/Contents/embedded.provisionprofile",
+      ),
+    );
+  const profiles = [];
+  for (const candidate of profileCandidates) {
+    try {
+      const xml = run("security", ["cms", "-D", "-i", candidate]);
+      const extract = (key, format) =>
+        run("plutil", ["-extract", key, format, "-o", "-", "--", "-"], {
+          input: xml,
+        });
+      const ent = JSON.parse(
+        run("plutil", ["-convert", "json", "-o", "-", "--", "-"], {
+          input: extract("Entitlements", "xml1"),
+        }),
+      );
+      const deviceXML = extract("ProvisionedDevices", "xml1");
+      const devices = [...deviceXML.matchAll(/<string>([^<]+)<\/string>/g)].map(
+        (match) => match[1],
+      );
+      const certificates = [
+        ...extract("DeveloperCertificates", "xml1").matchAll(
+          /<data>([\s\S]*?)<\/data>/g,
+        ),
+      ].map((match) =>
+        createHash("sha1")
+          .update(Buffer.from(match[1].replace(/\s/g, ""), "base64"))
+          .digest("hex"),
+      );
+      profiles.push({
+        path: candidate,
+        applicationIdentifier: ent["com.apple.application-identifier"],
+        keychainGroups: ent["keychain-access-groups"] ?? [],
+        expiresAt: extract("ExpirationDate", "raw").trim(),
+        devices,
+        allDevices: /<key>ProvisionsAllDevices<\/key>\s*<true\s*\/>/.test(xml),
+        certificateSha1s: certificates,
+      });
+    } catch {
+      /* Ignore invalid or unrelated profiles. */
+    }
+  }
+  const currentDevice = run("ioreg", [
+    "-rd1",
+    "-c",
+    "IOPlatformExpertDevice",
+  ]).match(/"IOPlatformUUID" = "([^"]+)"/)?.[1];
+  if (!currentDevice)
+    throw new Error(
+      "Could not identify this Mac for provisioning verification.",
+    );
+  const requiredDevices = [currentDevice];
+  const explicitDevicesFile = argument("--devices-file");
+  const deploymentInventory = join(output, "deployment-devices.json");
+  let targets = [];
+  try {
+    targets = JSON.parse(
+      await readFile(explicitDevicesFile ?? deploymentInventory, "utf8"),
+    );
+  } catch (error) {
+    if (explicitDevicesFile || error.code !== "ENOENT") throw error;
+  }
+  for (const target of targets) {
+    if (!target.udid)
+      throw new Error("Every target Mac must have a known hardware UUID.");
+    requiredDevices.push(target.udid);
+  }
+  const { selectProfile } = await import("../../dist/scripts/macos/profile.js");
+  const profile = selectProfile(profiles, requiredDevices, certificateSha1);
+  if (!profile)
+    throw new Error(
+      "No valid provisioning profile covers every target Mac, the required signing certificate, and the app's Keychain groups. Download an updated profile and pass --profile <path> with --devices-file <inventory.json>.",
+    );
+  await cp(profile.path, join(contents, "embedded.provisionprofile"));
+  if (explicitDevicesFile)
+    await writeFile(
+      deploymentInventory,
+      JSON.stringify(targets, null, 2) + "\n",
+    );
+  const cachedProfile = join(output, "all-macs.provisionprofile");
+  if (requestedProfile && resolve(profile.path) !== cachedProfile)
+    await cp(profile.path, cachedProfile);
+  console.log(
+    `Verified provisioning coverage for ${new Set(requiredDevices).size} target Mac(s); profile covers ${profile.devices.length} Mac(s).`,
+  );
+  await writeFile(
+    appEntitlements,
+    `<?xml version="1.0"?><plist version="1.0"><dict>
 <key>com.apple.application-identifier</key><string>H82Z395PDV.${identifier}</string>
 <key>com.apple.developer.team-identifier</key><string>H82Z395PDV</string>
 <key>keychain-access-groups</key><array>
 <string>H82Z395PDV.${identifier}</string>
 <string>H82Z395PDV.com.tonyxiao.codex-keychain-helper</string>
 </array></dict></plist>`,
-);
+  );
+} else {
+  await writeFile(
+    appEntitlements,
+    '<?xml version="1.0"?><plist version="1.0"><dict/></plist>',
+  );
+}
 run("codesign", [
   "--force",
   "--sign",
