@@ -1,3 +1,5 @@
+import { useNativeRefresh } from "./use-native-refresh";
+import { useNativeNavigation } from "./use-native-navigation.js";
 import { setNonce } from "get-nonce";
 import {
   NativeSelect,
@@ -96,6 +98,15 @@ function App() {
   const [operations, setOperations] = useState<Record<string, SaveOperation>>(
     {},
   );
+  useNativeNavigation(
+    vaultMode
+      ? 0
+      : Object.values(operations).some((op) => op.status === "saving")
+        ? 2
+        : cell || modal || Object.keys(operations).length
+          ? 1
+          : 0,
+  );
   const pending = useRef(new Set<string>());
   const projectRef = useRef(project);
   projectRef.current = project;
@@ -191,11 +202,19 @@ function App() {
         }
       } catch (error) {
         if (loadId.current === id) {
-          matrixRef.current = undefined;
-          setMatrix(undefined);
-          visibleIntent.current = false;
-          setAllVisible(false);
-          setHideEpoch((epoch) => epoch + 1);
+          if (
+            !quiet ||
+            (error instanceof ApiError &&
+              ["session", "authentication", "provider"].includes(
+                error.code ?? "",
+              ))
+          ) {
+            matrixRef.current = undefined;
+            setMatrix(undefined);
+            visibleIntent.current = false;
+            setAllVisible(false);
+            setHideEpoch((epoch) => epoch + 1);
+          }
           if (error instanceof ApiError && error.code === "session")
             disconnect();
           else setError((error as Error).message);
@@ -209,6 +228,7 @@ function App() {
     },
     [project, disconnect],
   );
+  useNativeRefresh(refresh);
   useEffect(() => {
     setMatrix(undefined);
     setCell(undefined);

@@ -162,6 +162,27 @@ try {
   assert.ok((await page.locator(".json-highlight .json-key").count()) > 0);
   assert.ok((await json.boundingBox())!.height > 200);
   await capture("json-editor.png");
+  // Changing the OS theme must update an already-open grid and JSON dialog.
+  const themeColors = () =>
+    page.evaluate<string[]>(`(() => {
+      const color = (selector, property) => getComputedStyle(document.querySelector(selector))[property];
+      return [color('body', 'backgroundColor'), color('.rdg', 'backgroundColor'),
+        color('.json-code-editor', 'backgroundColor'), color('.json-key', 'color')];
+    })()`);
+  await page.emulateMedia({ colorScheme: "light" });
+  const light = await themeColors();
+  await page.emulateMedia({ colorScheme: "dark" });
+  const dark = await themeColors();
+  assert.ok(
+    dark.every((value, index) => value !== light[index]),
+    "All surfaces must follow the system theme live",
+  );
+  assert.equal(await page.locator(".rdg-light").count(), 0);
+  assert.equal(await json.isVisible(), true);
+  await capture("json-editor-dark.png");
+  await page.emulateMedia({ colorScheme: "light" });
+  assert.deepEqual(await themeColors(), light);
+
   await json.fill('{"region":}');
   assert.equal(
     await page

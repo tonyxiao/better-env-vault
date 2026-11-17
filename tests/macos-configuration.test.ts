@@ -113,11 +113,12 @@ it("allows replacing an app credential even when another credential is available
 it("preserves schema authentication settings while making an existing headless token available", async () => {
   const readToken = vi.fn(missing);
   const config = await appConfiguration(
-    { schemas: ["/project/.env.schema"] },
+    { schemas: ["/project/.env.schema"], sourceNames: ["work"] },
     { ...defaults, readToken, dataProtectionTokenAvailable: true },
   );
   expect(config).toEqual({
     schemas: ["/project/.env.schema"],
+    sourceNames: ["work"],
     useDataProtectionToken: true,
   });
   expect(await needsServiceAccountSetup(config, readToken)).toBe(false);

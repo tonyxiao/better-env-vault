@@ -14,26 +14,59 @@ export interface DiscoveryOptions {
   serviceAccountKeychain?: string;
 }
 
-/** Discover account metadata only; tokens and secret values never pass through op. */
-export async function discoverAccounts(account?: string): Promise<string[]> {
-  if (account) return [account];
-  if (process.env.OP_ACCOUNT) return [process.env.OP_ACCOUNT];
+export interface DesktopAccount {
+  id: string;
+  label: string;
+}
+
+/** Cached account metadata only; never authenticate or read vault contents. */
+export async function desktopAccounts(): Promise<DesktopAccount[]> {
   try {
+    const env = { ...process.env };
+    delete env.OP_SERVICE_ACCOUNT_TOKEN;
     const { stdout } = await promisify(execFile)(
       "op",
       ["account", "list", "--format", "json"],
-      { timeout: 10_000, maxBuffer: 256_000 },
+      { timeout: 10_000, maxBuffer: 256_000, env },
     );
-    const accounts: unknown = JSON.parse(stdout);
-    if (Array.isArray(accounts)) {
-      const ids = accounts
-        .map((a) => a?.account_uuid)
-        .filter((id): id is string => typeof id === "string" && id.length > 0);
-      if (ids.length) return [...new Set(ids)];
-    }
+    return parseDesktopAccounts(JSON.parse(stdout));
   } catch {
-    /* Give a stable error without account CLI diagnostics. */
+    return [];
   }
+}
+export function parseDesktopAccounts(value: unknown): DesktopAccount[] {
+  if (!Array.isArray(value)) return [];
+  const accounts = new Map<string, DesktopAccount>();
+  for (const account of value) {
+    if (
+      typeof account?.account_uuid !== "string" ||
+      !/^[a-zA-Z0-9-]{1,128}$/.test(account.account_uuid)
+    )
+      continue;
+    let domain = "";
+    try {
+      domain = new URL(
+        account.url.includes("://") ? account.url : "https://" + account.url,
+      ).hostname;
+    } catch {
+      /* Optional metadata. */
+    }
+    const email =
+      typeof account.email === "string" ? account.email.slice(0, 160) : "";
+    accounts.set(account.account_uuid, {
+      id: account.account_uuid,
+      label:
+        [domain, email].filter(Boolean).join(" · ") || account.account_uuid,
+    });
+  }
+  return [...accounts.values()];
+}
+
+export async function discoverAccounts(account?: string): Promise<string[]> {
+  if (account) return [account];
+  if (process.env.OP_ACCOUNT) return [process.env.OP_ACCOUNT];
+  const accounts = await desktopAccounts();
+  if (accounts.length) return accounts.map((account) => account.id);
   throw new VaultError(
     "Select a 1Password account with --account <account-uuid>, or install the 1Password CLI for automatic account discovery.",
   );

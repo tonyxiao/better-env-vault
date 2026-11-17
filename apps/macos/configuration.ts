@@ -4,6 +4,7 @@ import { readServiceAccountToken } from "../../packages/core/src/keychain.js";
 export const appKeychainEntry = "better-env-vault";
 export interface AppConfiguration {
   schemas: string[];
+  sourceNames?: string[];
   discovery?: DiscoveryOptions;
   configureServiceAccount?: boolean;
   useDataProtectionToken?: boolean;
@@ -25,6 +26,7 @@ export async function appConfiguration(
     !!process.env.BEV_DATA_PROTECTION_SERVICE_ACCOUNT_TOKEN;
   if (config.schemas.length)
     return {
+      ...config,
       schemas: config.schemas,
       useDataProtectionToken:
         !environmentTokenAvailable && dataProtectionTokenAvailable,

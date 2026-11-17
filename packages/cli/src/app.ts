@@ -39,9 +39,13 @@ export function appCommand() {
       ])
         if (options[key]) args.push(flag, options[key]);
       await new Promise<void>((done, reject) => {
-        const child = spawn("/usr/bin/open", ["-n", path, "--args", ...args], {
-          stdio: "ignore",
-        });
+        const child = spawn(
+          "/usr/bin/open",
+          args.length ? ["-n", path, "--args", ...args] : [path],
+          {
+            stdio: "ignore",
+          },
+        );
         const fail = () =>
           reject(new VaultError("Could not launch the macOS app."));
         child.once("error", fail);

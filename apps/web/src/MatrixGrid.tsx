@@ -646,7 +646,7 @@ export function MatrixGrid(props: Props) {
   return (
     <DataGrid
       ref={grid}
-      className="environment-grid rdg-light"
+      className="environment-grid"
       aria-label="Environment values"
       columns={columns}
       rows={rows}

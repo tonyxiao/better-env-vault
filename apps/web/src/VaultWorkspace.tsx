@@ -1,3 +1,5 @@
+import { useNativeRefresh } from "./use-native-refresh";
+import { useNativeNavigation } from "./use-native-navigation.js";
 import {
   useCallback,
   useEffect,
@@ -257,6 +259,18 @@ export function VaultWorkspace({
   const [addStage, setAddStage] = useState<"choose" | "create">();
   const [addEnvironment, setAddEnvironment] = useState("");
   const [deleting, setDeleting] = useState(false);
+  useNativeNavigation(
+    saving || deleting || reviewBusy
+      ? 2
+      : details ||
+          addStage ||
+          review ||
+          Object.keys(drafts).length ||
+          Object.keys(operations).length
+        ? 1
+        : 0,
+  );
+
   const [deleteRows, setDeleteRows] = useState<VaultRow[]>();
   const [confirmation, setConfirmation] = useState("");
   const grid = useRef<DataGridHandle>(null);
@@ -341,6 +355,7 @@ export function VaultWorkspace({
       setError("");
       let completed = false;
       const loaded = new Set<string>();
+      let incomingCatalog: VaultCatalog | undefined;
       try {
         const response = await fetch(
           `/api/catalog?stream=1&values=1${fresh ? "&fresh=1" : ""}`,
@@ -390,18 +405,25 @@ export function VaultWorkspace({
               { environments: [], matrices: [], errors: [], auth: event.auth },
               event,
             );
-            catalogRef.current = data;
-            setCatalog(data);
-            setLoadedVaults(new Set());
+            incomingCatalog = data;
+            if (!quiet) {
+              catalogRef.current = data;
+              setCatalog(data);
+              setLoadedVaults(new Set());
+            }
             setProgress({ completed: 0, total: event.environments.length });
           } else {
-            if (!catalogRef.current)
+            if (!incomingCatalog)
               throw new Error("Catalog stream has no environment list.");
-            const data = applyCatalogEvent(catalogRef.current, event);
-            catalogRef.current = data;
-            setCatalog(data);
+            const data = applyCatalogEvent(incomingCatalog, event);
+            incomingCatalog = data;
+            if (!quiet || event.type === "complete") {
+              catalogRef.current = data;
+              setCatalog(data);
+            }
             if (event.type === "complete") {
               completed = true;
+              setLoadedVaults(new Set(data.environments.map((env) => env.id)));
               const available = new Set(catalogRows(data).map((row) => row.id));
               setSelected(
                 (previous) =>
@@ -409,7 +431,7 @@ export function VaultWorkspace({
               );
             } else {
               loaded.add(event.id);
-              setLoadedVaults(new Set(loaded));
+              if (!quiet) setLoadedVaults(new Set(loaded));
               setProgress({
                 completed: loaded.size,
                 total: data.environments.length,
@@ -449,9 +471,17 @@ export function VaultWorkspace({
         ) {
           if (error instanceof RequestError && error.code === "session")
             onDisconnect();
-          hide();
-          setCatalog(undefined);
-          catalogRef.current = undefined;
+          if (
+            !quiet ||
+            (error instanceof RequestError &&
+              ["session", "authentication", "provider"].includes(
+                error.code ?? "",
+              ))
+          ) {
+            hide();
+            setCatalog(undefined);
+            catalogRef.current = undefined;
+          }
           setError((error as Error).message);
         }
       } finally {
@@ -463,6 +493,7 @@ export function VaultWorkspace({
     },
     [hide, onDisconnect],
   );
+  useNativeRefresh(load);
   useEffect(() => {
     if (!mutationToken) return;
     alive.current = true;
@@ -1435,7 +1466,7 @@ export function VaultWorkspace({
               });
             }}
             ref={grid}
-            className="environment-grid vault-grid rdg-light"
+            className="environment-grid vault-grid"
             aria-label="Secrets across environments"
             rows={filtered}
             sortColumns={sortColumns}

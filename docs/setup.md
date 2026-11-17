@@ -612,6 +612,11 @@ Node version and both pinned checksums current when applying runtime updates.
 The standard signed build uses the same macOS Keychain implementation as
 `envault auth`. It has no shared-Keychain entitlement or embedded development
 profile, so the same architecture's signed app can be copied to your other Macs.
+To copy the verified portable build to the other Macs and run their installed-app
+checks, use `npm run app:deploy -- tx-m5 tx-mba cs-mini`. The command checks the
+signer and target architecture, preserves the old app until the replacement is
+verified, and leaves credentials on each Mac.
+
 Each Mac keeps its own app credential in Keychain. Use the native Service Account
 screen, or provision the installed signed app directly from the existing headless
 credential without placing its value in arguments, logs, or files:
@@ -702,14 +707,40 @@ search path, locale, and optional existing 1Password authentication environment;
 Node diagnostic flags and SDK logging settings are not inherited. Core dumps are
 disabled. Tokens stay in Keychain or memory; vault contents remain in memory
 apart from explicit user-authorized schema edits through the existing editor.
-Closing the last window or quitting terminates and reaps the server. Pipe closure
+Closing the last window retains the workspace in RAM for immediate reopening.
+Quit (⌘Q) terminates and reaps every active and cached server. Pipe closure
 and parent-process monitoring also stop it if the shell disappears unexpectedly.
+
+The Source selector and Accounts menu support multiple named service accounts,
+individual desktop accounts, and the current schema workspace. ⌘1–9 select the
+first nine entries; additional entries remain available in the menu. Add Service
+Account stores a separate named token through the existing native Keychain path.
+Add Desktop Account accepts an account UUID/name when automatic `op` metadata
+discovery is unavailable. Account discovery runs after the UI starts. A selected
+identity never silently falls back to another identity. Pending saves block source
+changes; unsaved drafts require confirmation before discarding.
+
+The app follows system light/dark appearance live, including grids and JSON editors.
+No theme preference is saved. Up to four inactive source workspaces retain their
+own server, random port, nonce/session, nonpersistent WebView, and UI state in RAM.
+Returning to a recent source swaps the view immediately; after 30 seconds since its
+last load/refresh, the existing UI revalidates in the background while retaining the
+previous inventory until the stream completes. Refresh (⌘R) uses the same guarded
+path, without restarting Node. Drafts and pending saves prevent revalidation from
+replacing an editor. The default `envault app` reuses the running application;
+explicit launch options open a separate configured instance. A true Quit clears
+all cached workspaces, so a cold launch still requires authentication/network reads.
+No secret-bearing data is cached on disk to disguise that cost.
 
 To check the installed app's actual WebKit UI and authenticated vault inventory
 without outputting any vault names, tokens, values, or browser payloads:
 
 ```bash
 npm run app:verify
+# Verify a live source switch too:
+# npm run app:verify -- --verify-source desktop:<account-uuid>
+# Exercise inherited SDK session → named Keychain source without another token:
+op-agent run --no-masking -- npm run app:verify -- --inherited-session --verify-source service:better-env-vault
 # Or: npm run app:verify -- --account <account-uuid>
 # Add --account or --auth/--service-account-keychain as above when needed.
 ```
@@ -717,6 +748,8 @@ npm run app:verify
 This verifies the installed signature, observes the random loopback listener,
 checks server termination and port closure on exit, and checks that no app-specific
 persistent WebKit data, HTTP storage, cache, saved state, or preferences were created.
+It also closes/reopens the window and restores the identical warm WebView/server
+in under 500 ms, without changing the session or reading vault data again.
 It runs the installed application, requires a successful session and a nonempty
 inventory from the existing provider path, prints only fixed success/failure
 markers, and quits with a corresponding exit code. It performs no vault mutations.

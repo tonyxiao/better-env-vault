@@ -1,3 +1,4 @@
+import { useNativeNavigation } from "./use-native-navigation.js";
 import {
   Check,
   Code,
@@ -177,6 +178,7 @@ export function SpreadsheetEditor({
     }
   }
   const dirty = saveValue !== baseline || empty !== baselineEmpty;
+  useNativeNavigation(dirty ? 1 : 0);
   // Clearing a previously populated cell is deliberate. Opening an already
   // empty/missing cell still requires explicit intent before creating an item.
   const canSave =

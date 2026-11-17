@@ -46,8 +46,30 @@ try {
   });
   await cell.click();
   await input.fill("first edit");
+  assert.equal(
+    await page.evaluate(() =>
+      (
+        window as Window & { __bevNavigationState?: () => number }
+      ).__bevNavigationState?.(),
+    ),
+    1,
+  );
+  await page.evaluate(() => window.dispatchEvent(new Event("bev-refresh")));
+  assert.equal(
+    catalogReads,
+    initialReads,
+    "Refresh must not replace an unsaved draft",
+  );
   await input.press("Control+Enter");
   await observed;
+  assert.equal(
+    await page.evaluate(() =>
+      (
+        window as Window & { __bevNavigationState?: () => number }
+      ).__bevNavigationState?.(),
+    ),
+    2,
+  );
   assert.equal(
     await cell.isDisabled(),
     true,
@@ -72,6 +94,14 @@ try {
     .filter({ hasText: "Saved notes for KEY in infra" })
     .waitFor();
   await page.unroute("**/api/edit?*");
+  assert.equal(
+    await page.evaluate(() =>
+      (
+        window as Window & { __bevNavigationState?: () => number }
+      ).__bevNavigationState?.(),
+    ),
+    0,
+  );
   await otherCell.getByText("newer other edit", { exact: true }).waitFor();
   await cell.click();
   assert.equal(await input.inputValue(), "first edit");

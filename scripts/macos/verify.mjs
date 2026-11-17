@@ -1,6 +1,13 @@
 // Runs the installed WebKit app. All browser payloads remain inside WebKit.
 import { spawn, execFileSync } from "node:child_process";
-import { access, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  open,
+  readFile,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -43,22 +50,41 @@ const statusPath = join(
   `verify-${randomBytes(6).toString("hex")}.status`,
 );
 await writeFile(statusPath, "", { mode: 0o600 });
-const child = spawn(
-  "/usr/bin/open",
-  [
-    "-n",
-    "-W",
-    "--stdout",
-    statusPath,
-    "--stderr",
-    "/dev/null",
-    bundle,
-    "--args",
-    "--verify",
-    ...process.argv.slice(2),
-  ],
-  { stdio: "ignore" },
-);
+// Local inherited-session verification uses the same GUI user's security context.
+// op-agent supplies the token in memory; never put it in launch arguments/files.
+const inheritedSession = process.argv.includes("--inherited-session");
+if (inheritedSession && !process.env.OP_SERVICE_ACCOUNT_TOKEN)
+  throw new Error("Inherited-session verification requires op-agent run.");
+const args = process.argv
+  .slice(2)
+  .filter((arg) => arg !== "--inherited-session");
+const statusFile = inheritedSession ? await open(statusPath, "w") : undefined;
+const child = inheritedSession
+  ? spawn(
+      join(bundle, "Contents/MacOS/BetterEnvVault"),
+      ["--verify", ...args],
+      {
+        stdio: ["ignore", statusFile.fd, "ignore"],
+      },
+    )
+  : spawn(
+      "/usr/bin/open",
+      [
+        "-n",
+        "-W",
+        "--stdout",
+        statusPath,
+        "--stderr",
+        "/dev/null",
+        bundle,
+        "--args",
+        "--verify",
+        ...args,
+      ],
+      { stdio: "ignore" },
+    );
+await statusFile?.close();
+
 let marker = "";
 let nativePid;
 let ended = false;
@@ -163,12 +189,28 @@ console.log(
     ? "SIGNATURE_LOOPBACK_SHUTDOWN_AND_STORAGE_OK"
     : "SIGNATURE_SETUP_SHUTDOWN_AND_STORAGE_OK",
 );
-if (marker.trim() === "UI_AND_AUTHENTICATED_INVENTORY_OK") {
+if (
+  marker.split("\n").includes("UI_AND_AUTHENTICATED_INVENTORY_OK") &&
+  marker
+    .split("\n")
+    .every((line) =>
+      [
+        "UI_AND_AUTHENTICATED_INVENTORY_OK",
+        "SOURCE_SWITCHING_OK",
+        "WARM_WORKSPACE_REUSE_OK",
+        "",
+      ].includes(line),
+    )
+) {
   console.log("UI_AND_AUTHENTICATED_INVENTORY_OK");
+  if (marker.includes("WARM_WORKSPACE_REUSE_OK"))
+    console.log("WARM_WORKSPACE_REUSE_OK");
+  if (marker.includes("SOURCE_SWITCHING_OK"))
+    console.log("SOURCE_SWITCHING_OK");
 } else {
   // Only permit fixed diagnostic enums, never arbitrary application output.
   const state = marker.match(
-    /^APP_VERIFICATION_FAILED: (STARTUP|SERVICE_ACCOUNT_REQUIRED|SESSION_UNAVAILABLE|INVENTORY_UNAVAILABLE|INVENTORY_EMPTY|UI_UNAVAILABLE|REQUEST_FAILED|JAVASCRIPT_FAILED)\s*$/,
+    /^APP_VERIFICATION_FAILED: (WARM_REUSE_FAILED|STARTUP|SOURCE_SELECTOR_UNAVAILABLE|SOURCE_SWITCH_FAILED|SERVICE_ACCOUNT_REQUIRED|SESSION_UNAVAILABLE|INVENTORY_UNAVAILABLE|INVENTORY_EMPTY|UI_UNAVAILABLE|REQUEST_FAILED|JAVASCRIPT_FAILED)\s*$/,
   )?.[1];
   console.log(`APP_VERIFICATION_FAILED: ${state ?? "UNAVAILABLE"}`);
   process.exitCode = 1;

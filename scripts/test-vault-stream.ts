@@ -147,6 +147,46 @@ try {
     .filter({ hasText: "Saved FAST_KEY in Fast vault" })
     .waitFor();
   assert.equal(provider.vaults[fast][0].value, "updated-after-stream");
+  // A warm workspace keeps its complete stale inventory while new vaults load.
+  let releaseRefresh!: () => void;
+  let refreshStarted!: () => void;
+  const refreshGate = new Promise<void>((done) => (releaseRefresh = done));
+  const refreshObserved = new Promise<void>((done) => (refreshStarted = done));
+  provider.readVault = async (id) => {
+    if (id === slow) {
+      refreshStarted();
+      await refreshGate;
+    }
+    return read(id);
+  };
+  await provider.save(slow, "NEW_KEY", "new-fixture", "");
+  await page.evaluate(() => window.dispatchEvent(new Event("bev-refresh")));
+  await refreshObserved;
+  assert.equal(
+    await slowCell.isVisible(),
+    true,
+    "SWR must retain the slow vault's stale rows",
+  );
+  assert.equal(await fastCell.isVisible(), true);
+  assert.equal(
+    await page
+      .getByRole("button", { name: "Edit NEW_KEY in Slow vault", exact: true })
+      .count(),
+    0,
+  );
+  releaseRefresh();
+  await page
+    .getByRole("button", { name: "Edit NEW_KEY in Slow vault", exact: true })
+    .waitFor();
+  await page.waitForFunction(
+    () =>
+      !(
+        document.querySelector(
+          'button[aria-label="Refresh secrets"]',
+        ) as HTMLButtonElement
+      )?.disabled,
+  );
+  provider.readVault = read;
   // Compatibility for an older CLI still running with a rebuilt web bundle.
   await page.route(/\/api\/catalog(?:\?|$)/, async (route) => {
     const url = new URL(route.request().url());

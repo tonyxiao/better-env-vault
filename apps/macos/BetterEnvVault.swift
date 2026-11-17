@@ -3,6 +3,23 @@ import Darwin
 import Security
 import WebKit
 
+struct AppSource {
+  let id: String
+  let label: String
+  let schemas: [String]
+  let discovery: [String: String]
+}
+
+struct WarmWorkspace {
+  let web: WKWebView
+  let child: Process
+  let input: Pipe
+  let origin: URL
+  let generation: Int
+  let parked: Date
+  let refreshed: Date
+}
+
 // No state restoration, preferences, URL credentials, disk cache, or payload logging.
 final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
   var window: NSWindow!
@@ -11,12 +28,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
   var input: Pipe?
   var origin: URL?
   var generation = 0
+  var nextGeneration = 0
+  var refreshedAt = Date()
+  var warm: [String: WarmWorkspace] = [:]
   var quitting = false
   var verifying = CommandLine.arguments.contains("--verify")
   var verified = false
+  var warmVerified = false
   var verificationSucceeded = false
   var terminationSignals: [DispatchSourceSignal] = []
   var verificationState = "STARTUP"
+  var verificationSource: String?
+  var verificationSwitched = false
   var schemas: [String] = []
   var discovery: [String: String] = [:]
   var tokenField: NSSecureTextField?
@@ -25,6 +48,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
   var connectionHandle: FileHandle?
   var pendingConnectionToken: String?
   var connectionFailed = false
+  var sources: [AppSource] = []
+  var selectedSource = ""
+  let sourcePicker = NSPopUpButton(frame: .zero, pullsDown: false)
+  let sourceMenu = NSMenu(title: "Accounts")
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     var limit = rlimit(rlim_cur: 0, rlim_max: 0)
@@ -43,6 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
       backing: .buffered, defer: false)
     window.title = "Better Env Vault"
     window.isRestorable = false
+    window.isReleasedWhenClosed = false
     window.center()
     let menu = NSMenu()
     let appItem = NSMenuItem()
@@ -73,6 +101,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     ] {
       edit.addItem(withTitle: title, action: Selector(action), keyEquivalent: key)
     }
+    let sourcesItem = NSMenuItem(title: "Accounts", action: nil, keyEquivalent: "")
+    sourcesItem.submenu = sourceMenu
+    menu.addItem(sourcesItem)
+    sourcePicker.target = self
+    sourcePicker.action = #selector(pickSource)
+    sourcePicker.setAccessibilityLabel("Environment source")
+    sourcePicker.toolTip =
+      "Choose a service account, desktop account, or schema workspace. Use ⌘1–9 for the first nine."
+    sourcePicker.addItem(withTitle: "Loading accounts…")
+    sourcePicker.isEnabled = false
     NSApplication.shared.mainMenu = menu
     let args = Array(CommandLine.arguments.dropFirst())
     var index = 0
@@ -88,6 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
       }
       let value = args[index + 1]
       switch flag {
+      case "--verify-source": verificationSource = value
       case "--connect-socket": connectionPath = value
       case "--schema": schemas.append(value)
       case "--auth":
@@ -112,16 +151,207 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     if let path = connectionPath { receiveConnection(path) } else { start() }
   }
 
+  func showContent(_ view: NSView) {
+    let root = NSView(
+      frame: window.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 1280, height: 820))
+    let bar = NSStackView()
+    bar.orientation = .horizontal
+    bar.spacing = 10
+    bar.translatesAutoresizingMaskIntoConstraints = false
+    bar.addArrangedSubview(NSTextField(labelWithString: "Source"))
+    bar.addArrangedSubview(sourcePicker)
+    root.addSubview(bar)
+    view.translatesAutoresizingMaskIntoConstraints = false
+    root.addSubview(view)
+    NSLayoutConstraint.activate([
+      bar.topAnchor.constraint(equalTo: root.topAnchor, constant: 10),
+      bar.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
+      bar.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -16),
+      bar.heightAnchor.constraint(equalToConstant: 30),
+      sourcePicker.widthAnchor.constraint(lessThanOrEqualToConstant: 700),
+      view.topAnchor.constraint(equalTo: bar.bottomAnchor, constant: 10),
+      view.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+      view.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+      view.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+    ])
+    window.contentView = root
+  }
+
+  func storedSourceNames() -> [String] {
+    let query: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: "com.envault.1password.service-account",
+      kSecMatchLimit as String: kSecMatchLimitAll,
+      kSecReturnAttributes as String: true,
+      kSecUseAuthenticationUI as String: kSecUseAuthenticationUIFail,
+    ]
+    var result: CFTypeRef?
+    guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else { return [] }
+    return (result as? [[String: Any]] ?? []).compactMap {
+      $0[kSecAttrAccount as String] as? String
+    }
+  }
+
+  func updateSources(_ record: [String: Any]) {
+    guard let rows = record["sources"] as? [[String: Any]] else { return }
+    let previousSources = sources
+    sources = rows.compactMap { row in
+      guard let id = row["id"] as? String, let label = row["label"] as? String,
+        let schemas = row["schemas"] as? [String]
+      else { return nil }
+      return AppSource(
+        id: id, label: label, schemas: schemas,
+        discovery: row["discovery"] as? [String: String] ?? [:])
+    }
+    // Retain metadata for manually added sources and project workspaces.
+    for source in previousSources where !sources.contains(where: { $0.id == source.id }) {
+      sources.append(source)
+    }
+    selectedSource = record["selectedSource"] as? String ?? selectedSource
+    sourcePicker.removeAllItems()
+    sourceMenu.removeAllItems()
+    for (index, source) in sources.enumerated() {
+      sourcePicker.addItem(withTitle: source.label)
+      sourcePicker.lastItem?.representedObject = source.id
+      let item = NSMenuItem(
+        title: source.label, action: #selector(menuSource),
+        keyEquivalent: index < 9 ? String(index + 1) : "")
+      item.keyEquivalentModifierMask = [.command]
+      item.target = self
+      item.representedObject = source.id
+      item.state = source.id == selectedSource ? .on : .off
+      sourceMenu.addItem(item)
+    }
+    sourcePicker.menu?.addItem(.separator())
+    sourcePicker.addItem(withTitle: "Add Service Account…")
+    sourcePicker.lastItem?.representedObject = "add-service"
+    sourcePicker.addItem(withTitle: "Add Desktop Account…")
+    sourcePicker.lastItem?.representedObject = "add-desktop"
+    sourceMenu.addItem(.separator())
+    sourceMenu.addItem(
+      withTitle: "Add Service Account…", action: #selector(addServiceAccount), keyEquivalent: ""
+    ).target = self
+    sourceMenu.addItem(
+      withTitle: "Add Desktop Account…", action: #selector(addDesktopAccount), keyEquivalent: ""
+    ).target = self
+    restoreSourceSelection()
+    sourcePicker.isEnabled = true
+  }
+
+  func restoreSourceSelection() {
+    if let index = sources.firstIndex(where: { $0.id == selectedSource }) {
+      sourcePicker.selectItem(at: index)
+    }
+  }
+  @objc func pickSource() {
+    guard let id = sourcePicker.selectedItem?.representedObject as? String else { return }
+    restoreSourceSelection()
+    if id == "add-service" {
+      addServiceAccount()
+      return
+    }
+    if id == "add-desktop" {
+      addDesktopAccount()
+      return
+    }
+    chooseSource(id)
+  }
+  @objc func menuSource(_ sender: NSMenuItem) {
+    if let id = sender.representedObject as? String { chooseSource(id) }
+  }
+  func allowSourceChange(_ action: @escaping () -> Void) {
+    guard let view = web else {
+      action()
+      return
+    }
+    view.evaluateJavaScript("window.__bevNavigationState?.() ?? 0") { [weak self] value, error in
+      guard let self else { return }
+      let state = value as? Int ?? 0
+      if error != nil { return }
+      if state == 2 {
+        let alert = NSAlert()
+        alert.messageText = "Wait for the current save to finish"
+        alert.informativeText = "Switching sources is unavailable while a change is being saved."
+        alert.runModal()
+        return
+      }
+      if state == 1 {
+        let alert = NSAlert()
+        alert.messageText = "Discard unsaved drafts?"
+        alert.informativeText =
+          "Switching sources closes this workspace. Unsaved drafts will be discarded."
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Discard and Switch")
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        self.stop()
+      }
+      action()
+    }
+  }
+  func chooseSource(_ id: String) {
+    guard id != selectedSource, let source = sources.first(where: { $0.id == id }) else { return }
+    allowSourceChange { [weak self] in
+      guard let self else { return }
+      self.parkWorkspace()
+      self.schemas = source.schemas
+      self.discovery = source.discovery
+      self.selectedSource = source.id
+      self.restoreSourceSelection()
+      for item in self.sourceMenu.items {
+        item.state = item.representedObject as? String == source.id ? .on : .off
+      }
+      if !self.restoreWorkspace(source.id) { self.start() }
+    }
+  }
+  func askForSourceName(title: String, placeholder: String) -> String? {
+    let alert = NSAlert()
+    alert.messageText = title
+    let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 26))
+    field.placeholderString = placeholder
+    alert.accessoryView = field
+    alert.addButton(withTitle: "Cancel")
+    alert.addButton(withTitle: "Continue")
+    guard alert.runModal() == .alertSecondButtonReturn else { return nil }
+    let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard value.range(of: "^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$", options: .regularExpression) != nil,
+      !value.hasPrefix("ops_"), !value.hasPrefix("A3-")
+    else { return nil }
+    return value
+  }
+  @objc func addServiceAccount() {
+    allowSourceChange { [weak self] in
+      guard let self,
+        let name = self.askForSourceName(
+          title: "Name this service account", placeholder: "For example: work or staging")
+      else { return }
+      self.schemas = []
+      self.discovery = ["auth": "service-account", "serviceAccountKeychain": name]
+      self.start(configureServiceAccount: true)
+    }
+  }
+  @objc func addDesktopAccount() {
+    allowSourceChange { [weak self] in
+      guard let self,
+        let name = self.askForSourceName(
+          title: "Choose a desktop account", placeholder: "1Password account UUID or name")
+      else { return }
+      self.schemas = []
+      self.discovery = ["auth": "desktop", "account": name]
+      self.start()
+    }
+  }
+
   func status(_ text: String) {
     let label = NSTextField(wrappingLabelWithString: text)
     label.alignment = .center
     label.frame = NSRect(x: 40, y: 320, width: 1100, height: 100)
     let view = NSView()
     view.addSubview(label)
-    window.contentView = view
+    showContent(view)
   }
 
   func fail() {
+    stop()
     status(
       "Unable to open Better Env Vault. Check 1Password authorization, then use Refresh to retry.")
     if connectionPath != nil {
@@ -131,8 +361,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     }
   }
 
+  func parkWorkspace() {
+    guard !selectedSource.isEmpty, let view = web, let process = child,
+      process.isRunning, let pipe = input, let url = origin
+    else { return }
+    if let previous = warm.removeValue(forKey: selectedSource) { dispose(previous) }
+    warm[selectedSource] = WarmWorkspace(
+      web: view, child: process, input: pipe, origin: url, generation: generation, parked: Date(),
+      refreshed: refreshedAt)
+    web = nil
+    child = nil
+    input = nil
+    origin = nil
+    // Keep a bounded number of RAM-only sessions; the source list has no limit.
+    if warm.count > 4, let oldest = warm.min(by: { $0.value.parked < $1.value.parked }) {
+      dispose(oldest.value)
+      warm.removeValue(forKey: oldest.key)
+    }
+  }
+
+  func restoreWorkspace(_ id: String) -> Bool {
+    guard let workspace = warm.removeValue(forKey: id) else { return false }
+    guard workspace.child.isRunning else {
+      dispose(workspace)
+      return false
+    }
+    web = workspace.web
+    child = workspace.child
+    input = workspace.input
+    origin = workspace.origin
+    generation = workspace.generation
+    showContent(workspace.web)
+    refreshedAt = workspace.refreshed
+    if Date().timeIntervalSince(refreshedAt) > 30 { refresh() }
+    if verifying { verifyUI(attempt: 0) }
+    return true
+  }
+
+  func dispose(_ workspace: WarmWorkspace) {
+    workspace.web.stopLoading()
+    workspace.web.navigationDelegate = nil
+    workspace.web.configuration.userContentController.removeAllUserScripts()
+    workspace.input.fileHandleForWriting.closeFile()
+    if workspace.child.isRunning { workspace.child.terminate() }
+    let process = workspace.child
+    DispatchQueue.global().async {
+      let deadline = Date().addingTimeInterval(2)
+      while process.isRunning && Date() < deadline { usleep(10_000) }
+      if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+      process.waitUntilExit()
+    }
+  }
+
   func stop() {
-    generation += 1
+    nextGeneration += 1
+    generation = nextGeneration
     web?.stopLoading()
     web?.configuration.userContentController.removeAllUserScripts()
     web?.navigationDelegate = nil
@@ -154,10 +437,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     child = nil
   }
 
-  @objc func refresh() { start() }
+  @objc func refresh() {
+    guard let view = web else {
+      start()
+      return
+    }
+    refreshedAt = Date()
+    view.evaluateJavaScript(
+      "window.dispatchEvent(new Event('bev-refresh'))", completionHandler: nil)
+  }
   @objc func browseVaults() {
-    schemas = []
-    start()
+    allowSourceChange { [weak self] in
+      self?.schemas = []
+      self?.start()
+    }
   }
   @objc func openSchema() {
     let panel = NSOpenPanel()
@@ -165,15 +458,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     panel.allowsMultipleSelection = true
     panel.canChooseDirectories = false
     if panel.runModal() == .OK {
-      schemas = panel.urls.map(\.path)
-      start()
+      let paths = panel.urls.map(\.path)
+      allowSourceChange { [weak self] in
+        guard let self else { return }
+        if let previous = self.warm.removeValue(forKey: "schemas") { self.dispose(previous) }
+        self.schemas = paths
+        self.start()
+      }
     }
   }
 
   @objc func configureServiceAccount() {
-    schemas = []
-    discovery["auth"] = "service-account"
-    start(configureServiceAccount: true)
+    allowSourceChange { [weak self] in
+      guard let self else { return }
+      self.schemas = []
+      self.discovery["auth"] = "service-account"
+      self.start(configureServiceAccount: true)
+    }
   }
 
   func showServiceAccountSetup(error: Bool = false) {
@@ -242,7 +543,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
       stack.centerYAnchor.constraint(equalTo: view.centerYAnchor),
       stack.widthAnchor.constraint(equalToConstant: 540),
     ])
-    window.contentView = view
+    showContent(view)
     window.makeFirstResponder(field)
   }
 
@@ -371,6 +672,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
   func start(configureServiceAccount: Bool = false) {
     stop()
     status("Loading Better Env Vault…")
+    if configureServiceAccount, let cached = warm.removeValue(forKey: selectedSource) {
+      dispose(cached)
+    }
     let current = generation
     guard let resources = Bundle.main.resourceURL else {
       fail()
@@ -411,8 +715,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         schemas.isEmpty
         ? [
           "schemas": [], "discovery": discovery, "configureServiceAccount": configureServiceAccount,
+          "sourceNames": storedSourceNames(),
         ]
-        : ["schemas": schemas]
+        : ["schemas": schemas, "sourceNames": storedSourceNames()]
       let data = try JSONSerialization.data(withJSONObject: config)
       try process.run()
       outgoing.fileHandleForWriting.closeFile()
@@ -424,17 +729,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         // Read only fixed setup states and the bounded readiness record.
         while true {
           var data = Data()
-          while data.count < 2048 {
+          while data.count < 65536 {
             let byte = outgoing.fileHandleForReading.readData(ofLength: 1)
             if byte.isEmpty { return }
             if byte == Data([10]) { break }
             data.append(byte)
           }
-          guard data.count < 2048,
+          guard data.count < 65536,
             let record = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
           else { return }
           DispatchQueue.main.async {
             guard let self, self.generation == current else { return }
+            self.updateSources(record)
+            if record["sources"] != nil && record["url"] == nil && record["setupRequired"] == nil {
+              return
+            }
             if record["setupRequired"] as? Bool == true {
               self.showServiceAccountSetup(error: record["error"] as? Bool == true)
               return
@@ -465,6 +774,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
   }
 
   func load(_ url: URL, bootstrap: String) {
+    refreshedAt = Date()
     origin = url
     let config = WKWebViewConfiguration()
     config.websiteDataStore = .nonPersistent()
@@ -478,8 +788,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     view.autoresizingMask = [.width, .height]
     view.navigationDelegate = self
     view.allowsBackForwardNavigationGestures = false
+    view.underPageBackgroundColor = .windowBackgroundColor
     web = view
-    window.contentView = view
+    showContent(view)
     view.load(URLRequest(url: url))
   }
 
@@ -488,23 +799,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
   ) {
     let url = navigationAction.request.url
+    let expected =
+      webView === web ? origin : warm.values.first(where: { $0.web === webView })?.origin
     let allowed =
-      url?.scheme == origin?.scheme && url?.host == origin?.host && url?.port == origin?.port
+      expected != nil && url?.scheme == expected?.scheme && url?.host == expected?.host
+      && url?.port == expected?.port
     decisionHandler(allowed && navigationAction.targetFrame?.isMainFrame == true ? .allow : .cancel)
   }
   func webView(
     _ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
     withError error: Error
-  ) { fail() }
-  func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { start() }
+  ) { if webView === web { fail() } }
+  func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+    if webView === web {
+      start()
+    } else if let cached = warm.first(where: { $0.value.web === webView }) {
+      dispose(cached.value)
+      warm.removeValue(forKey: cached.key)
+    }
+  }
   func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
     // Bootstrap remains only in this document's memory, never in future scripts/history.
     webView.configuration.userContentController.removeAllUserScripts()
-    if verifying { verifyUI(attempt: 0) }
+    if verifying && webView === web { verifyUI(attempt: 0) }
   }
 
   func verifyUI(attempt: Int) {
     guard verifying, !verified, let view = web else { return }
+    let menuItems = sourceMenu.items.filter { $0.representedObject is String }
+    guard !sources.isEmpty, menuItems.count == sources.count,
+      menuItems.enumerated().allSatisfy({
+        $0.element.keyEquivalent == ($0.offset < 9 ? String($0.offset + 1) : "")
+      }),
+      sourcePicker.selectedItem?.representedObject as? String == selectedSource
+    else {
+      verificationState = "SOURCE_SELECTOR_UNAVAILABLE"
+      finishVerification(false)
+      return
+    }
     // Only fixed status enums cross back to native code; payloads remain in WebKit.
     let script = """
       return (async () => {
@@ -537,6 +869,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         self.verificationState = "JAVASCRIPT_FAILED"
       }
       if self.verificationState == "OK" {
+        if let target = self.verificationSource, !self.verificationSwitched {
+          guard let index = self.sources.firstIndex(where: { $0.id == target }) else {
+            if attempt < 60 {
+              DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                self.verifyUI(attempt: attempt + 1)
+              }
+            } else {
+              self.verificationState = "SOURCE_SWITCH_FAILED"
+              self.finishVerification(false)
+            }
+            return
+          }
+          guard target != self.selectedSource else {
+            self.verificationState = "SOURCE_SWITCH_FAILED"
+            self.finishVerification(false)
+            return
+          }
+          self.verificationSwitched = true
+          if index < 9 {
+            let keys: [UInt16] = [18, 19, 20, 21, 23, 22, 26, 28, 25]
+            guard
+              let event = NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [.command],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: self.window.windowNumber, context: nil, characters: String(index + 1),
+                charactersIgnoringModifiers: String(index + 1), isARepeat: false,
+                keyCode: keys[index]),
+              NSApplication.shared.mainMenu?.performKeyEquivalent(with: event) == true
+            else {
+              self.verificationState = "SOURCE_SWITCH_FAILED"
+              self.finishVerification(false)
+              return
+            }
+          } else {
+            self.sourcePicker.selectItem(at: index)
+            self.pickSource()
+          }
+          return
+        }
+        if let target = self.verificationSource, self.selectedSource != target {
+          self.verificationState = "SOURCE_SWITCH_FAILED"
+          self.finishVerification(false)
+          return
+        }
+        if !self.warmVerified {
+          guard let process = self.child, let origin = self.origin else {
+            self.finishVerification(false)
+            return
+          }
+          let source = self.selectedSource
+          self.warmVerified = true
+          let start = ProcessInfo.processInfo.systemUptime
+          self.parkWorkspace()
+          self.window.close()
+          _ = self.applicationShouldHandleReopen(NSApplication.shared, hasVisibleWindows: false)
+          guard self.restoreWorkspace(source), self.web === view,
+            self.child === process, self.origin == origin, process.isRunning,
+            ProcessInfo.processInfo.systemUptime - start < 0.5
+          else {
+            self.verificationState = "WARM_REUSE_FAILED"
+            self.finishVerification(false)
+            return
+          }
+          FileHandle.standardOutput.write(Data("WARM_WORKSPACE_REUSE_OK\n".utf8))
+          return
+        }
         self.finishVerification(true)
       } else if self.verificationState == "INVENTORY_UNAVAILABLE"
         || self.verificationState == "INVENTORY_EMPTY"
@@ -557,13 +955,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         (success
           ? "UI_AND_AUTHENTICATED_INVENTORY_OK\n"
           : "APP_VERIFICATION_FAILED: \(verificationState)\n").utf8))
+    if success && verificationSwitched {
+      FileHandle.standardOutput.write(Data("SOURCE_SWITCHING_OK\n".utf8))
+    }
     verificationSucceeded = success
     NSApplication.shared.terminate(nil)
   }
-  func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+  func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+  func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool
+  {
+    window.makeKeyAndOrderFront(nil)
+    refresh()
+    return true
+  }
   func applicationWillTerminate(_ notification: Notification) {
     quitting = true
+    // Signal all parked children before waiting, so Quit has one bounded deadline.
+    let cached = Array(warm.values)
+    warm.removeAll()
+    for workspace in cached {
+      workspace.input.fileHandleForWriting.closeFile()
+      if workspace.child.isRunning { workspace.child.terminate() }
+    }
     stop()
+    let deadline = Date().addingTimeInterval(2)
+    for workspace in cached {
+      while workspace.child.isRunning && Date() < deadline { usleep(10_000) }
+      if workspace.child.isRunning { kill(workspace.child.processIdentifier, SIGKILL) }
+      workspace.child.waitUntilExit()
+    }
     if connectionPath != nil { exit(connectionFailed ? 1 : 0) }
     if verifying { exit(verificationSucceeded ? 0 : 1) }
   }

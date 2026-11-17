@@ -1,3 +1,5 @@
+import { desktopAccounts } from "../../packages/core/src/discovery.js";
+import { appSources, sourceId } from "./sources.js";
 // Private pipe protocol. Credentials enter only through stdin and native Keychain;
 // stdout carries only fixed setup states and the in-memory session handshake.
 import { createInterface } from "node:readline";
@@ -32,7 +34,18 @@ setInterval(() => {
 }, 1000).unref();
 function setup(error = false) {
   awaitingToken = true;
-  process.stdout.write(JSON.stringify({ setupRequired: true, error }) + "\n");
+  process.stdout.write(
+    JSON.stringify({
+      setupRequired: true,
+      error,
+      ...(config
+        ? {
+            sources: appSources(config, config.sourceNames ?? [], []),
+            selectedSource: sourceId(config),
+          }
+        : {}),
+    }) + "\n",
+  );
 }
 async function start() {
   app = await startServer({ ...config!, port: 0 });
@@ -41,8 +54,24 @@ async function start() {
     return;
   }
   process.stdout.write(
-    JSON.stringify({ url: app.url, bootstrap: app.bootstrap }) + "\n",
+    JSON.stringify({
+      url: app.url,
+      bootstrap: app.bootstrap,
+      selectedSource: sourceId(config!),
+      sources: appSources(config!, config!.sourceNames ?? [], []),
+    }) + "\n",
   );
+  if (!config!.configureServiceAccount) {
+    void desktopAccounts().then((accounts) => {
+      if (!stopping && accounts.length)
+        process.stdout.write(
+          JSON.stringify({
+            selectedSource: sourceId(config!),
+            sources: appSources(config!, config!.sourceNames ?? [], accounts),
+          }) + "\n",
+        );
+    });
+  }
 }
 // Serialize messages so repeated submissions cannot start concurrent servers.
 let pending = Promise.resolve();

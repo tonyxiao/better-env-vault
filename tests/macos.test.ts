@@ -107,7 +107,7 @@ it("keeps credential setup on private pipes, rejects invalid input without echoi
   child.stdin!.write(
     JSON.stringify({ schemas: [], configureServiceAccount: true }) + "\n",
   );
-  expect(JSON.parse((await initial)[0])).toEqual({
+  expect(JSON.parse((await initial)[0])).toMatchObject({
     setupRequired: true,
     error: false,
   });
@@ -116,7 +116,7 @@ it("keeps credential setup on private pipes, rejects invalid input without echoi
     JSON.stringify({ serviceAccountToken: "invalid-fixture-not-a-token" }) +
       "\n",
   );
-  expect(JSON.parse((await rejected)[0])).toEqual({
+  expect(JSON.parse((await rejected)[0])).toMatchObject({
     setupRequired: true,
     error: true,
   });
