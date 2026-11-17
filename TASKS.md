@@ -16,12 +16,15 @@
 - [x] Add source menu shortcuts, protect pending saves/drafts, and isolate source sessions.
 - [x] Follow system dark mode live throughout the native shell, grids, dialogs, and editors.
 - [x] Make startup discovery nonblocking and repeated reopen/source switching immediate with RAM-only stale-while-revalidate workspaces.
-- [x] Terminate every active and cached loopback server on Quit.
+- [x] Terminate active, cached, and retiring loopback servers on Quit; verify a dedicated watchdog stops a blocked backend after abrupt app termination.
 - [x] Verify editing, notes, search, masking, project/schema modes, source switching, dark mode, and warm reuse with isolated fixtures.
 - [x] Run formatting, type checking, the complete isolated suite, production build, CLI checks, signature/requirement/entitlement checks, live inventory, shutdown, and storage checks.
 - [x] Document reproducible build, installation, authentication, and performance behavior.
 - [x] Commit and push the completed implementation to `main`.
 - [x] Install the compact-switcher, account-name setup, and icon update on all four Macs; verify signatures everywhere and live service-account catalog loading on Studio and CS Mini. Laptop desktop-SDK verification is tracked below.
-- [ ] Verify reliable desktop SDK access on TX M5 and Mac Studio. The runtime library-signing fix is installed; account-name setup avoids CLI discovery. A fresh 1Password restart/unlock on TX M5 is pending because SDK requests intermittently hang or are denied while CLI access succeeds.
+- [x] Verify TX M5 desktop SDK access twice after restarting 1Password, including full catalog UI, warm reopening, shutdown, and storage checks; open the normal app and save only the native account name.
+- [ ] Verify TX MBA desktop access after installing/signing into 1Password there; its SDK library is absent. Optional Studio desktop verification also needs local authorization. Studio and CS Mini primary service-account paths pass.
 - [x] Commit and push the follow-up fixes and credential-placement correction.
 - [ ] Cover all four Macs in the optional shared-Keychain provisioning profile, without distributing service-account credentials. Correct Provisioning UDIDs are collected; Apple API device registration currently returns HTTP 403. Portable signed builds already run on all four Macs.
+
+- [ ] Deploy the final blocked-SDK shutdown watchdog patch to TX M5 once SSH is reachable again; the compact selector/icon and desktop-authentication fix are already installed and verified there.

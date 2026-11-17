@@ -1,3 +1,4 @@
+import { watchParent } from "./parent-watchdog.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { access } from "node:fs/promises";
@@ -33,10 +34,8 @@ async function stop() {
 input.on("close", () => void stop());
 for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const)
   process.once(signal, () => void stop());
-const parent = process.ppid;
-setInterval(() => {
-  if (process.ppid !== parent) void stop();
-}, 1000).unref();
+watchParent();
+
 function setup(error = false) {
   awaitingToken = true;
   process.stdout.write(
@@ -77,12 +76,23 @@ async function verifyDesktopLibrary() {
       ],
       { timeout: 10_000, maxBuffer: 4096 },
     );
-    return;
+    return true;
   }
+  return false;
 }
 async function start() {
-  if (config!.discovery?.auth === "desktop" || config!.schemas.length)
-    await verifyDesktopLibrary();
+  if (config!.discovery?.auth === "desktop") {
+    if (!(await verifyDesktopLibrary())) {
+      process.stdout.write(
+        JSON.stringify({
+          desktopAppRequired: true,
+          selectedSource: sourceId(config!),
+          sources: appSources(config!, config!.sourceNames ?? [], []),
+        }) + "\n",
+      );
+      return;
+    }
+  } else if (config!.schemas.length) await verifyDesktopLibrary();
   app = await startServer({ ...config!, port: 0 });
   if (stopping) {
     await app.close();

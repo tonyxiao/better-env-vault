@@ -816,6 +816,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
           DispatchQueue.main.async {
             guard let self, self.generation == current else { return }
             self.updateSources(record)
+            if record["desktopAppRequired"] as? Bool == true {
+              self.status(
+                "This source requires the 1Password desktop app. Install 1Password, sign in, and enable SDK integration, then use Refresh."
+              )
+              if self.verifying {
+                self.verificationState = "DESKTOP_APP_REQUIRED"
+                self.finishVerification(false)
+              }
+              return
+            }
             if record["desktopAccountRequired"] as? Bool == true {
               self.showDesktopAccountSetup()
               return

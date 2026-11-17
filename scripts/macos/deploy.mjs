@@ -51,15 +51,34 @@ for (const host of hosts) {
   run("ssh", [
     "-o",
     "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=15",
     host,
     "mkdir -p ~/Library/Caches/better-env-vault-installer",
   ]);
   const target = `${host}:Library/Caches/better-env-vault-installer/`;
-  run("scp", [archive, target + "update.zip"]);
-  run("scp", [join(root, "scripts/macos/verify.mjs"), target + "verify.mjs"]);
-  run("ssh", ["-o", "BatchMode=yes", host, "/bin/sh -s"], {
-    stdio: ["pipe", "inherit", "inherit"],
-    input: `set -eu
+  run("scp", [
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=15",
+    archive,
+    target + "update.zip",
+  ]);
+  run("scp", [
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=15",
+    join(root, "scripts/macos/verify.mjs"),
+    target + "verify.mjs",
+  ]);
+  run(
+    "ssh",
+    ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", host, "/bin/sh -s"],
+    {
+      stdio: ["pipe", "inherit", "inherit"],
+      input: `set -eu
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 [ "$(uname -m)" = "${process.arch === "arm64" ? "arm64" : "x86_64"}" ] || { echo 'Target architecture differs; build on that architecture.' >&2; exit 1; }
 cd "$HOME/Library/Caches/better-env-vault-installer"
@@ -80,7 +99,8 @@ if [ -e "$stage/previous.app" ] && command -v trash >/dev/null; then
   trash "$stage/previous.app"
 fi
 `,
-  });
+    },
+  );
   console.log(
     `${signatureOnly ? "INSTALLED_SIGNATURE_VERIFIED" : "INSTALLED_AND_VERIFIED"} ${host}`,
   );

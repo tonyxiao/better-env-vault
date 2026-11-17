@@ -719,7 +719,8 @@ disabled. Tokens stay in Keychain or memory; vault contents remain in memory
 apart from explicit user-authorized schema edits through the existing editor.
 Closing the last window retains the workspace in RAM for immediate reopening.
 Quit (⌘Q) terminates and reaps every active and cached server. Pipe closure
-and parent-process monitoring also stop it if the shell disappears unexpectedly.
+and a separate parent-watchdog thread also stop it if the shell disappears
+unexpectedly, even while the desktop SDK blocks the main server thread.
 
 The bundled runtime permits loading 1Password's separately signed desktop SDK
 library. Before starting a desktop session, the app verifies that library against
