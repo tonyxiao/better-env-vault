@@ -1,5 +1,9 @@
 {
   "extends": "./tsconfig.json",
-  "include": ["packages/**/*.ts", "apps/web/src/server.ts"],
+  "include": [
+    "packages/**/*.ts",
+    "apps/web/src/server.ts",
+    "apps/macos/server.ts"
+  ],
   "exclude": ["tests", "scripts", "apps/web/src/main.tsx"]
 }

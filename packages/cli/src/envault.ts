@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { appCommand } from "./app.js";
 import { Command, Option } from "commander";
 import { safeError, VaultError } from "../../core/src/errors.js";
 import { serve, webOptions } from "./serve.js";
@@ -65,6 +66,8 @@ program.action(async (schema: string | undefined, options) => {
       : {}),
   });
 });
+
+program.addCommand(appCommand());
 
 try {
   await program.parseAsync();

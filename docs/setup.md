@@ -586,3 +586,78 @@ If authentication waits or times out, unlock 1Password, approve its SDK request,
 and check **Settings → Developer → Integrate with other apps**. If a vault is
 unavailable, verify its ID and account selection. If a save is rejected as stale,
 refresh before editing again.
+
+## Native macOS application
+
+From this stable checkout, with Xcode Command Line Tools and the installed signing
+identity `Apple Development: Tony Xiao (9QULCFJ59K)`, run:
+
+```bash
+npm ci
+npm run app:install
+npm link
+envault app
+```
+
+This builds, signs, verifies, and installs `~/Applications/Better Env Vault.app`.
+`npm run app:build` creates the signed deliverable in
+`.local/macos/Better Env Vault.app` without installing it. Both commands require
+Tony's actual signing identity and fail if it is unavailable; there is no ad-hoc
+signing fallback. The bundle ID is `com.txlforge.better-env-vault`. The build
+uses the lockfile, a SHA-256-pinned official Node 24.22.3 macOS runtime for the
+host architecture, compiled TypeScript, and the production React assets. The
+installed app needs neither global Node nor this checkout. Rebuild separately on
+Apple Silicon and Intel for those respective architectures. Keep the bundled
+Node version and both pinned checksums current when applying runtime updates.
+
+The application opens the existing vault browser. Desktop authentication uses
+the existing 1Password SDK and account discovery; install the 1Password CLI
+(`op`) for automatic account discovery or specify an account. For service-account
+access, use the same macOS Keychain entry as the CLI. Credentials are never app
+arguments or preferences:
+
+```bash
+envault app --account <account-uuid>
+envault app --auth service-account --service-account-keychain <entry-name>
+envault app --schema /absolute/path/to/.env.schema
+```
+
+`better-env-vault app` accepts the same options. The app's Open Schema menu supports
+multiple schemas; Browse Vaults returns to vault discovery. Refresh restarts the
+embedded session; the existing UI refresh control reloads vault contents. All
+editing, notes, search, masking, and schema resolution use the same UI and core
+as the CLI server. Schema mode reads authentication settings from each schema.
+App options and selected schemas are intentionally not persisted.
+
+The shell starts its bundled server on a random IPv4 loopback port. A one-use
+per-launch bootstrap credential travels through anonymous pipes and a document
+startup script, then the existing session endpoint sets an HttpOnly session cookie
+in a nonpersistent WKWebView. Neither credential nor payload travels in an app URL.
+All existing origin, Host, mutation-token, and no-store checks remain active.
+Navigation outside the embedded origin and popup windows are blocked. No WebKit
+state restoration, persistent website data store, request logging, or payload
+logging is enabled. Node inherits only the home directory, a fixed executable
+search path, locale, and optional existing 1Password authentication environment;
+Node diagnostic flags and SDK logging settings are not inherited. Core dumps are
+disabled. Tokens stay in Keychain or memory; vault contents remain in memory
+apart from explicit user-authorized schema edits through the existing editor.
+Closing the last window or quitting terminates and reaps the server. Pipe closure
+and parent-process monitoring also stop it if the shell disappears unexpectedly.
+
+To check the installed app's actual WebKit UI and authenticated vault inventory
+without outputting any vault names, tokens, values, or browser payloads:
+
+```bash
+npm run app:verify
+# Or: npm run app:verify -- --account <account-uuid>
+# Add --account or --auth/--service-account-keychain as above when needed.
+```
+
+This verifies the installed signature, observes the random loopback listener,
+checks server termination and port closure on exit, and checks that no app-specific
+persistent WebKit data, HTTP storage, cache, saved state, or preferences were created.
+It runs the installed application, requires a successful session and a nonempty
+inventory from the existing provider path, prints only fixed success/failure
+markers, and quits with a corresponding exit code. It performs no vault mutations.
+The isolated `npm test` suite also checks private-pipe startup, session replay
+rejection, cross-launch isolation, no-store responses, and shutdown on pipe closure.

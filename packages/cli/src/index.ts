@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { appCommand } from "./app.js";
 import { Command } from "commander";
 import { spawn } from "node:child_process";
 import { writeFile } from "node:fs/promises";
@@ -181,6 +182,8 @@ program
       "Created schema. Add variable definitions or adopt vault items in the web app.\n",
     );
   });
+
+program.addCommand(appCommand());
 
 try {
   await program.parseAsync();

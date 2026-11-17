@@ -128,7 +128,9 @@ function App() {
   useEffect(() => {
     let cancelled = false;
     const fragment = new URLSearchParams(location.hash.slice(1));
-    const launchToken = fragment.get("session");
+    const native = window as Window & { __bevBootstrap?: string };
+    const launchToken = native.__bevBootstrap ?? fragment.get("session");
+    delete native.__bevBootstrap;
     // Clear the launch credential immediately, before any request or rendering.
     if (launchToken) history.replaceState(null, "", location.pathname);
     void (async () => {
