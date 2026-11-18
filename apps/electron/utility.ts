@@ -4,11 +4,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { safeError } from "../../packages/core/src/errors.js";
-import { storeServiceAccountToken } from "../../packages/core/src/keychain.js";
 import { startServer } from "../web/src/server.js";
 import {
   appConfiguration,
-  needsServiceAccountSetup,
   type AppConfiguration,
 } from "../macos/configuration.js";
 import { appSources, sourceId } from "../macos/sources.js";
@@ -26,7 +24,6 @@ if (process.argv.includes("--block"))
 
 let server: Awaited<ReturnType<typeof startServer>> | undefined;
 let config: AppConfiguration | undefined;
-let awaitingToken = false;
 let awaitingDesktopAccount = false;
 let stopping = false;
 let pending = Promise.resolve();
@@ -64,16 +61,40 @@ async function verifyDesktopLibrary() {
   return false;
 }
 
+async function loadDataProtectionToken() {
+  if (process.platform !== "darwin") return false;
+  try {
+    const { stdout } = await promisify(execFile)(
+      join(
+        process.resourcesPath,
+        "DataProtectionCredential.app/Contents/MacOS/DataProtectionCredential",
+      ),
+      [],
+      { timeout: 10_000, maxBuffer: 65_536, encoding: "utf8" },
+    );
+    if (
+      stdout.startsWith("ops_") &&
+      stdout.length <= 65_536 &&
+      !/[\r\n\0]/.test(stdout)
+    )
+      process.env.BEV_DATA_PROTECTION_SERVICE_ACCOUNT_TOKEN = stdout;
+    return !!process.env.BEV_DATA_PROTECTION_SERVICE_ACCOUNT_TOKEN;
+  } catch (error) {
+    const detail = error as { code?: string | number; signal?: string };
+    send({
+      sharedCredentialAvailable: false,
+      sharedCredentialError: String(detail.code ?? detail.signal ?? "unknown"),
+    });
+    /* This Mac may intentionally use 1Password desktop authentication. */
+    return false;
+  }
+}
+
 function sourceRecord() {
   return {
     selectedSource: sourceId(config!),
     sources: appSources(config!, config!.sourceNames ?? [], []),
   };
-}
-
-function requestToken(error = false) {
-  awaitingToken = true;
-  send({ setupRequired: true, error, ...sourceRecord() });
 }
 
 async function start() {
@@ -97,10 +118,31 @@ async function start() {
 }
 
 async function begin(input: AppConfiguration) {
-  config = await appConfiguration(input);
-  const setupRequired = await needsServiceAccountSetup(config);
-  if (setupRequired) requestToken();
-  else if (
+  const sharedCredentialAvailable = await loadDataProtectionToken();
+  if (sharedCredentialAvailable) send({ sharedCredentialAvailable: true });
+  if (
+    input.discovery?.auth === "service-account" &&
+    !sharedCredentialAvailable
+  ) {
+    send({
+      fatal: true,
+      error: "The shared op-agent Data Protection credential is unavailable.",
+    });
+    return;
+  }
+  config = await appConfiguration(input, {
+    environmentTokenAvailable: false,
+    dataProtectionTokenAvailable: sharedCredentialAvailable,
+    readToken: async () => {
+      throw new Error("Electron does not use duplicate Keychain credentials.");
+    },
+  });
+  if (config.useDataProtectionToken) {
+    process.env.OP_SERVICE_ACCOUNT_TOKEN =
+      process.env.BEV_DATA_PROTECTION_SERVICE_ACCOUNT_TOKEN;
+    delete process.env.BEV_DATA_PROTECTION_SERVICE_ACCOUNT_TOKEN;
+  }
+  if (
     !config.schemas.length &&
     config.discovery?.auth === "desktop" &&
     !config.discovery.account &&
@@ -134,24 +176,6 @@ async function receive(message: unknown) {
       ...new Set([...(config!.desktopAccounts ?? []), account.trim()]),
     ];
     awaitingDesktopAccount = false;
-    await start();
-    return;
-  }
-  if (data.type === "service-token" && awaitingToken) {
-    if (typeof data.token !== "string") {
-      requestToken(true);
-      return;
-    }
-    try {
-      await storeServiceAccountToken(
-        config!.discovery!.serviceAccountKeychain!,
-        data.token,
-      );
-    } catch {
-      requestToken(true);
-      return;
-    }
-    awaitingToken = false;
     await start();
     return;
   }

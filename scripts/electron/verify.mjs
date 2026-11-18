@@ -10,6 +10,16 @@ const bundle = join(homedir(), "Applications/Better Env Vault.app");
 const executable = join(bundle, "Contents/MacOS/Better Env Vault");
 const scratch = resolve("tmp/electron-verify");
 await mkdir(scratch, { recursive: true, mode: 0o700 });
+const argument = (name) => {
+  const equals = process.argv.find((value) => value.startsWith(`--${name}=`));
+  if (equals) return equals.slice(name.length + 3);
+  const index = process.argv.indexOf(`--${name}`);
+  return index >= 0 ? process.argv[index + 1] : undefined;
+};
+const expectedSource = argument("verify-source");
+const requireSharedCredential = process.argv.includes(
+  "--require-shared-credential",
+);
 
 function existsProcess(pid) {
   try {
@@ -63,6 +73,14 @@ const result = await waitForFile(statusPath, 2_000);
 await unlink(statusPath);
 if (result.status !== "ok")
   throw new Error(`Electron inventory verification failed: ${result.detail}`);
+if (expectedSource && result.selectedSource !== expectedSource)
+  throw new Error(
+    `Expected Electron source ${expectedSource}, got ${result.selectedSource ?? "none"}.`,
+  );
+if (requireSharedCredential && result.sharedCredentialAvailable !== true)
+  throw new Error(
+    `Shared Data Protection credential unavailable: ${result.sharedCredentialError ?? "unknown"}.`,
+  );
 for (const pid of result.utilityPids ?? [])
   if (existsProcess(pid))
     throw new Error(`Utility process ${pid} survived normal app quit.`);

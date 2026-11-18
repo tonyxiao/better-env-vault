@@ -31,18 +31,15 @@ it("prefers the supplied environment credential without reading saved credential
   expect(config.useDataProtectionToken).toBeUndefined();
   expect(readToken).not.toHaveBeenCalled();
 });
-it("uses the existing app Keychain implementation before a shared Data Protection credential", async () => {
+it("uses the shared Data Protection credential before a duplicate app credential", async () => {
   const readToken = vi.fn(async () => "ops_non_secret_fixture");
   const config = await appConfiguration(
     { schemas: [] },
     { ...defaults, readToken, dataProtectionTokenAvailable: true },
   );
-  expect(readToken).toHaveBeenCalledWith(appKeychainEntry);
-  expect(config.discovery).toEqual({
-    auth: "service-account",
-    serviceAccountKeychain: appKeychainEntry,
-  });
-  expect(config.useDataProtectionToken).toBeUndefined();
+  expect(readToken).not.toHaveBeenCalled();
+  expect(config.discovery).toEqual({ auth: "service-account" });
+  expect(config.useDataProtectionToken).toBe(true);
 });
 it("uses the existing Data Protection credential without desktop authentication or a token copy", async () => {
   const config = await appConfiguration(

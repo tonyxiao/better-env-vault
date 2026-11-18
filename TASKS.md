@@ -5,7 +5,7 @@
 - [x] Replace the AppKit/WKWebView shell with a signed Electron app while retaining the existing TypeScript backend and React UI.
 - [x] Run each source in an Electron-managed utility process; verify cleanup after normal quit and forced main-process death without a custom watchdog.
 - [x] Sandbox renderers, disable Node integration, keep Chromium data ephemeral, and persist only non-secret source metadata.
-- [x] Preserve the native shell as explicit `app:native:*` rollback commands and keep its app and Keychain credential recoverable during rollout.
+- [x] Preserve the native shell as explicit `app:native:*` rollback commands; both shells can use the canonical op-agent Data Protection credential.
 - [x] Build, install, and verify the production Electron app on TX Studio with live service-account inventory.
 - [x] Install the Electron app on TX M5, TX MBA, and CS Mini; verify live inventory on M5 and CS Mini and the signed bundle on MBA. TX MBA still needs 1Password before desktop inventory can pass.
 
@@ -14,7 +14,7 @@
 - [x] Preserve both CLI commands and add `envault app`.
 - [x] Sign portable builds with Tony’s required Apple Development identity; fail if unavailable.
 - [x] Install and verify the base rollout through `5b0d421` in `~/Applications` on Mac Studio, TX M5, TX MBA, and CS Mini.
-- [x] Limit saved app service-account tokens to TX Studio and CS Mini; remove the accidentally copied tokens from TX M5 and TX MBA. Use desktop authentication on the laptops.
+- [x] Keep the canonical op-agent Data Protection item only on TX Studio and CS Mini; remove every classic-Keychain duplicate. Use desktop authentication on the laptops.
 - [x] Verify Mac Studio’s 1Password desktop account is signed in.
 - [x] Support multiple service-account, desktop-account, and schema sources without a four-source limit.
 - [x] Add a custom macOS icon, bundle every required resolution, and install it across the Macs.
@@ -32,4 +32,5 @@
 - [x] Verify TX M5 desktop SDK access twice after restarting 1Password, including full catalog UI, warm reopening, shutdown, and storage checks; open the normal app and save only the native account name.
 - [ ] Verify TX MBA desktop access after installing/signing into 1Password there; its SDK library is absent. Optional Studio desktop verification also needs local authorization. Studio and CS Mini primary service-account paths pass.
 - [x] Commit and push the follow-up fixes and credential-placement correction.
-- [ ] Cover all four Macs in the optional shared-Keychain provisioning profile, without distributing service-account credentials. Correct Provisioning UDIDs are collected; Apple API device registration currently returns HTTP 403. Portable signed builds already run on all four Macs.
+- [x] Register all four Macs and generate the shared-Keychain development profile; deploy one identical build without transferring or saving service-account credentials.
+- [x] Verify canonical shared access after deleting the classic `better-env-vault` and `better-env-vault-electron` entries on TX Studio and CS Mini; `op-agent vault list` and Electron live inventory still pass on both.

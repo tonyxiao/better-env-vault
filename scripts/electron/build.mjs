@@ -1,6 +1,15 @@
 import { packager } from "@electron/packager";
 import { execFileSync } from "node:child_process";
-import { cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import {
+  cp,
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -18,7 +27,18 @@ const utilityEntitlements = join(
   root,
   "apps/electron/entitlements-utility.plist",
 );
+const credentialEntitlements = join(
+  root,
+  "apps/electron/entitlements-credential.plist",
+);
 const install = process.argv.includes("--install");
+
+const argument = (name) => {
+  const index = process.argv.indexOf(name);
+  if (index < 0) return undefined;
+  if (!process.argv[index + 1]) throw new Error(`Missing value for ${name}.`);
+  return resolve(process.argv[index + 1]);
+};
 
 function run(command, args, options = {}) {
   return execFileSync(command, args, {
@@ -39,6 +59,120 @@ const identities = execFileSync(
 );
 if (!identities.includes(`"${identity}"`))
   throw new Error(`Required signing identity unavailable: ${identity}`);
+const identityMatch = identities
+  .split("\n")
+  .find((line) => line.includes(`"${identity}"`))
+  ?.match(/\b([A-F0-9]{40})\b/);
+if (!identityMatch) throw new Error("Could not resolve signing certificate.");
+const certificateSha1 = identityMatch[1].toLowerCase();
+
+const requestedProfile = argument("--profile");
+const profileCandidates = requestedProfile
+  ? [requestedProfile]
+  : [join(output, "all-macs.provisionprofile")];
+for (const directory of [
+  join(homedir(), "Library/Developer/Xcode/UserData/Provisioning Profiles"),
+  join(homedir(), "Library/MobileDevice/Provisioning Profiles"),
+])
+  try {
+    for (const name of await readdir(directory))
+      if (/\.(provisionprofile|mobileprovision)$/.test(name))
+        profileCandidates.push(join(directory, name));
+  } catch {
+    /* Xcode may not have created both profile directories. */
+  }
+
+const profileRecords = [];
+for (const path of profileCandidates)
+  try {
+    const xml = execFileSync("security", ["cms", "-D", "-i", path], {
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const extract = (key, format = "raw") =>
+      execFileSync("plutil", ["-extract", key, format, "-o", "-", "--", "-"], {
+        input: xml,
+        encoding: "utf8",
+      });
+    const list = (key) =>
+      [...extract(key, "xml1").matchAll(/<string>([^<]+)<\/string>/g)].map(
+        (match) => match[1],
+      );
+    const certificates = [
+      ...extract("DeveloperCertificates", "xml1").matchAll(
+        /<data>([\s\S]*?)<\/data>/g,
+      ),
+    ].map((match) =>
+      createHash("sha1")
+        .update(Buffer.from(match[1].replace(/\s/g, ""), "base64"))
+        .digest("hex"),
+    );
+    const entitlements = JSON.parse(
+      execFileSync("plutil", ["-convert", "json", "-o", "-", "--", "-"], {
+        input: extract("Entitlements", "xml1"),
+        encoding: "utf8",
+      }),
+    );
+    profileRecords.push({
+      path,
+      applicationIdentifier:
+        entitlements["com.apple.application-identifier"] ?? "",
+      keychainGroups: entitlements["keychain-access-groups"] ?? [],
+      platforms: list("Platform"),
+      devices: list("ProvisionedDevices"),
+      expiresAt: new Date(extract("ExpirationDate").trim()),
+      certificates,
+    });
+  } catch {
+    /* Ignore unrelated or invalid profiles. */
+  }
+
+const hardware = JSON.parse(
+  execFileSync("system_profiler", ["SPHardwareDataType", "-json"], {
+    encoding: "utf8",
+  }),
+).SPHardwareDataType?.[0];
+const currentDevice = hardware?.provisioning_UDID;
+if (!currentDevice)
+  throw new Error("Could not identify this Mac's Provisioning UDID.");
+const requiredDevices = [currentDevice];
+const devicesFile = argument("--devices-file");
+if (devicesFile) {
+  const targets = JSON.parse(await readFile(devicesFile, "utf8"));
+  for (const target of targets) {
+    if (!target.udid)
+      throw new Error("Every target Mac must have a Provisioning UDID.");
+    requiredDevices.push(target.udid);
+  }
+}
+const covers = (pattern, value) =>
+  pattern === value ||
+  (pattern.endsWith("*") && value.startsWith(pattern.slice(0, -1)));
+const profile = profileRecords
+  .filter(
+    (candidate) =>
+      candidate.expiresAt > new Date() &&
+      candidate.platforms.includes("OSX") &&
+      candidate.certificates.includes(certificateSha1) &&
+      covers(
+        candidate.applicationIdentifier,
+        "H82Z395PDV.com.txlforge.better-env-vault",
+      ) &&
+      candidate.keychainGroups.some((group) =>
+        covers(group, "H82Z395PDV.com.tonyxiao.codex-keychain-helper"),
+      ) &&
+      requiredDevices.every((device) => candidate.devices.includes(device)),
+  )
+  .sort((left, right) => right.expiresAt - left.expiresAt)[0];
+if (!profile)
+  throw new Error(
+    `No Mac provisioning profile authorizes the shared Data Protection Keychain group for ${new Set(requiredDevices).size} required device(s).`,
+  );
+await mkdir(output, { recursive: true });
+if (requestedProfile)
+  await cp(profile.path, join(output, "all-macs.provisionprofile"));
+console.log(
+  `Shared Data Protection profile covers ${profile.devices.length} Mac(s).`,
+);
 
 run("npm", ["run", "build"]);
 await rm(scratch, { recursive: true, force: true });
@@ -102,6 +236,35 @@ for (const size of [16, 32, 128, 256, 512])
     ]);
 const icon = join(scratch, "AppIcon.icns");
 run("iconutil", ["-c", "icns", iconset, "-o", icon]);
+const credentialBundle = join(scratch, "DataProtectionCredential.app");
+const credentialContents = join(credentialBundle, "Contents");
+const credentialMacOS = join(credentialContents, "MacOS");
+const credentialReader = join(credentialMacOS, "DataProtectionCredential");
+await mkdir(credentialMacOS, { recursive: true });
+run("xcrun", [
+  "swiftc",
+  "-O",
+  "-framework",
+  "Security",
+  join(root, "apps/electron/DataProtectionCredential.swift"),
+  "-o",
+  credentialReader,
+]);
+await cp(profile.path, join(credentialContents, "embedded.provisionprofile"));
+await writeFile(
+  join(credentialContents, "Info.plist"),
+  `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>DataProtectionCredential</string>
+<key>CFBundleIdentifier</key><string>com.txlforge.better-env-vault.credential</string>
+<key>CFBundleName</key><string>DataProtectionCredential</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>${rootPackage.version}</string>
+<key>CFBundleVersion</key><string>1</string>
+<key>LSBackgroundOnly</key><true/>
+</dict></plist>`,
+);
 
 const [directory] = await packager({
   dir: stage,
@@ -116,6 +279,7 @@ const [directory] = await packager({
   icon,
   appVersion: rootPackage.version,
   buildVersion: "3",
+  extraResource: [credentialBundle],
   osxSign: {
     identity,
     type: "development",
@@ -123,8 +287,11 @@ const [directory] = await packager({
     batchCodesignCalls: true,
     hardenedRuntime: true,
     entitlements: baseEntitlements,
+    provisioningProfile: profile.path,
     preAutoEntitlements: false,
     optionsForFile(filePath) {
+      if (filePath.includes("/DataProtectionCredential.app"))
+        return { entitlements: credentialEntitlements, timestamp: "none" };
       if (/ Helper\.app$/.test(filePath))
         return { entitlements: utilityEntitlements, timestamp: "none" };
       return { timestamp: "none" };

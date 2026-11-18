@@ -49,6 +49,12 @@ export async function appConfiguration(
     };
   if (environmentTokenAvailable)
     return { ...config, discovery: { ...discovery, auth: "service-account" } };
+  if (dataProtectionTokenAvailable)
+    return {
+      ...config,
+      discovery: { ...discovery, auth: "service-account" },
+      useDataProtectionToken: true,
+    };
   try {
     await (options.readToken ?? readServiceAccountToken)(appKeychainEntry);
     return {
@@ -62,12 +68,6 @@ export async function appConfiguration(
   } catch {
     // No usable saved app credential: try the existing Data Protection item.
   }
-  if (dataProtectionTokenAvailable)
-    return {
-      ...config,
-      discovery: { ...discovery, auth: "service-account" },
-      useDataProtectionToken: true,
-    };
   return {
     ...config,
     discovery:

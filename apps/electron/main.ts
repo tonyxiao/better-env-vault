@@ -6,7 +6,6 @@ import type {
 } from "electron";
 import { randomUUID } from "node:crypto";
 import {
-  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -14,7 +13,6 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { createServer as createSocketServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -47,11 +45,12 @@ interface ReadyRecord {
   launchUrl?: string;
   selectedSource?: string;
   sources?: AppSource[];
-  setupRequired?: boolean;
   desktopAccountRequired?: boolean;
   desktopAppRequired?: boolean;
   fatal?: boolean;
   error?: string;
+  sharedCredentialAvailable?: boolean;
+  sharedCredentialError?: string;
 }
 interface Workspace {
   key: string;
@@ -60,6 +59,8 @@ interface Workspace {
   window: BrowserWindowType;
   ready: boolean;
   parkedAt: number;
+  sharedCredentialAvailable?: boolean;
+  sharedCredentialError?: string;
 }
 
 const argument = (name: string, values = process.argv) => {
@@ -79,12 +80,10 @@ const argumentsFor = (name: string, values = process.argv) => {
 const verifyStatus = argument("verify-status");
 const verifySource = argument("verify-source");
 const lifecycleStatus = argument("lifecycle-status");
-const provisionServiceAccount = argument("provision-service-account");
-const provisionSocket = argument("provision-socket");
 const settingsDirectory = join(app.getPath("appData"), "Better Env Vault");
 const settingsPath = join(settingsDirectory, "settings.json");
 let settings: Settings = {
-  sourceNames: ["better-env-vault"],
+  sourceNames: [],
   desktopAccounts: [],
 };
 let current: Workspace | undefined;
@@ -110,14 +109,8 @@ function loadSettings() {
       readFileSync(settingsPath, "utf8"),
     ) as Partial<Settings>;
     settings = {
-      sourceNames: [
-        ...new Set(
-          [
-            "better-env-vault",
-            ...(Array.isArray(value.sourceNames) ? value.sourceNames : []),
-          ].filter(validName),
-        ),
-      ],
+      // Electron uses the one canonical op-agent Data Protection item.
+      sourceNames: [],
       desktopAccounts: [
         ...new Set(
           (Array.isArray(value.desktopAccounts)
@@ -153,15 +146,14 @@ function writeVerification(status: string, detail?: string) {
       mainPid: process.pid,
       utilityPids: [...warm.values()].map((workspace) => workspace.utility.pid),
       selectedSource: current?.source?.id,
+      sharedCredentialAvailable: current?.sharedCredentialAvailable,
+      sharedCredentialError: current?.sharedCredentialError,
     }),
     { mode: 0o600 },
   );
 }
 
-function configFor(
-  source?: string,
-  configureServiceAccount = false,
-): AppConfiguration {
+function configFor(source?: string): AppConfiguration {
   const schemas = argumentsFor("schema");
   const base = {
     schemas,
@@ -170,14 +162,9 @@ function configFor(
   } satisfies AppConfiguration;
   if (schemas.length) return base;
   if (source?.startsWith("service:")) {
-    const name = source.slice("service:".length);
     return {
       ...base,
-      configureServiceAccount,
-      discovery: {
-        auth: "service-account",
-        ...(name !== "session" ? { serviceAccountKeychain: name } : {}),
-      },
+      discovery: { auth: "service-account" },
     };
   }
   if (source?.startsWith("desktop:")) {
@@ -192,15 +179,13 @@ function configFor(
   }
   const auth = argument("auth");
   const account = argument("account");
-  const keychain = argument("service-account-keychain");
   return {
     ...base,
     discovery:
-      auth || account || keychain
+      auth || account
         ? {
             auth: auth === "service-account" ? "service-account" : "desktop",
             ...(account ? { account } : {}),
-            ...(keychain ? { serviceAccountKeychain: keychain } : {}),
           }
         : undefined,
   };
@@ -353,6 +338,10 @@ async function waitForWorkspace(workspace: Workspace) {
 async function handleRecord(workspace: Workspace, value: unknown) {
   if (!value || typeof value !== "object") return;
   const record = value as ReadyRecord;
+  if (record.sharedCredentialAvailable !== undefined)
+    workspace.sharedCredentialAvailable = record.sharedCredentialAvailable;
+  if (record.sharedCredentialError)
+    workspace.sharedCredentialError = record.sharedCredentialError;
   if (record.sources) mergeSources(record.sources);
   if (record.selectedSource) {
     const previousKey = workspace.key;
@@ -396,34 +385,6 @@ async function handleRecord(workspace: Workspace, value: unknown) {
     });
     return;
   }
-  if (record.setupRequired) {
-    if (
-      provisionServiceAccount &&
-      workspace.key === `service:${provisionServiceAccount}` &&
-      process.env.OP_SERVICE_ACCOUNT_TOKEN
-    ) {
-      const token = process.env.OP_SERVICE_ACCOUNT_TOKEN;
-      delete process.env.OP_SERVICE_ACCOUNT_TOKEN;
-      workspace.utility.postMessage({ type: "service-token", token });
-      return;
-    }
-    const token = await input({
-      title: "Connect Service Account",
-      message: record.error
-        ? "That token could not be saved. Enter a valid 1Password service-account token."
-        : "Enter the 1Password service-account token. It is sent only to the local utility process and Keychain.",
-      secret: true,
-    });
-    if (!token) {
-      failWorkspace(
-        workspace,
-        "A service-account token is required for this source.",
-      );
-      return;
-    }
-    workspace.utility.postMessage({ type: "service-token", token });
-    return;
-  }
   if (record.fatal) {
     failWorkspace(
       workspace,
@@ -462,7 +423,7 @@ function enforceWarmLimit() {
   while (warm.size > 4 && parked.length) dispose(parked.shift()!);
 }
 
-function startWorkspace(source?: string, configureServiceAccount = false) {
+function startWorkspace(source?: string) {
   const key = source ?? `launch:${randomUUID()}`;
   const window = createWindow(!current);
   const utility = utilityProcess.fork(
@@ -475,13 +436,7 @@ function startWorkspace(source?: string, configureServiceAccount = false) {
         Object.entries(process.env).filter(
           ([name, value]) =>
             value !== undefined &&
-            [
-              "HOME",
-              "PATH",
-              "LANG",
-              "OP_ACCOUNT",
-              "OP_SERVICE_ACCOUNT_TOKEN",
-            ].includes(name),
+            ["HOME", "PATH", "LANG", "OP_ACCOUNT"].includes(name),
         ) as [string, string][],
       ),
     },
@@ -503,7 +458,7 @@ function startWorkspace(source?: string, configureServiceAccount = false) {
   utility.once("spawn", () =>
     utility.postMessage({
       type: "start",
-      config: configFor(source, configureServiceAccount),
+      config: configFor(source),
     }),
   );
   return workspace;
@@ -538,12 +493,12 @@ async function canSwitch() {
   return true;
 }
 
-async function selectSource(id: string, configureServiceAccount = false) {
-  if (current?.key === id && !configureServiceAccount) return;
+async function selectSource(id: string) {
+  if (current?.key === id) return;
   if (!(await canSwitch())) return;
   const previous = current;
-  let target = configureServiceAccount ? undefined : warm.get(id);
-  if (!target) target = startWorkspace(id, configureServiceAccount);
+  let target = warm.get(id);
+  if (!target) target = startWorkspace(id);
   current = target;
   settings.selectedSource = id;
   saveSettings();
@@ -582,28 +537,6 @@ async function addDesktopAccount() {
   await selectSource(id);
 }
 
-async function addServiceAccount() {
-  const name = await input({
-    title: "Add Service Account",
-    message: "Choose a local Keychain name for this service account.",
-    value: "better-env-vault",
-  });
-  if (!validName(name)) return;
-  settings.sourceNames = [...new Set([...settings.sourceNames, name.trim()])];
-  saveSettings();
-  const id = `service:${name.trim()}`;
-  sources.set(id, {
-    id,
-    label:
-      name.trim() === "better-env-vault"
-        ? "Service Account · Default"
-        : `Service Account · ${name.trim()}`,
-    schemas: [],
-    discovery: { auth: "service-account", serviceAccountKeychain: name.trim() },
-  });
-  await selectSource(id, true);
-}
-
 function sourceMenu(): MenuItemConstructorOptions[] {
   const choices = [...sources.values()];
   return [
@@ -616,7 +549,6 @@ function sourceMenu(): MenuItemConstructorOptions[] {
     })),
     { type: "separator" as const },
     { label: "Add Desktop Account…", click: () => void addDesktopAccount() },
-    { label: "Add Service Account…", click: () => void addServiceAccount() },
   ];
 }
 
@@ -663,65 +595,14 @@ ipcMain.on("shell:source-menu", (event) => {
 });
 
 function initialSource() {
-  if (provisionServiceAccount) return `service:${provisionServiceAccount}`;
   if (verifySource) return verifySource;
   if (argumentsFor("schema").length) return "schemas";
   const auth = argument("auth");
   if (auth === "desktop") return `desktop:${argument("account") ?? "auto"}`;
-  if (auth === "service-account")
-    return `service:${argument("service-account-keychain") ?? "session"}`;
-  return settings.selectedSource;
-}
-
-async function receiveProvisionToken(socketPath: string) {
-  try {
-    rmSync(socketPath, { force: true });
-  } catch {}
-  return await new Promise<string>((resolvePromise, reject) => {
-    let settled = false;
-    const cleanup = () => {
-      try {
-        rmSync(socketPath, { force: true });
-      } catch {}
-    };
-    const server = createSocketServer((socket) => {
-      const chunks: Buffer[] = [];
-      let bytes = 0;
-      socket.on("data", (chunk: Buffer) => {
-        bytes += chunk.length;
-        if (bytes > 65_536) {
-          socket.destroy();
-          fail(new Error("Service-account provisioning payload is too large."));
-        } else chunks.push(chunk);
-      });
-      socket.on("end", () => {
-        if (settled) return;
-        const token = Buffer.concat(chunks).toString("utf8").trim();
-        if (!token.startsWith("ops_") || /[\r\n\0]/.test(token)) {
-          fail(new Error("Invalid service-account provisioning payload."));
-          return;
-        }
-        settled = true;
-        clearTimeout(timeout);
-        server.close(() => {
-          cleanup();
-          resolvePromise(token);
-        });
-      });
-    });
-    const fail = (error: Error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      server.close(cleanup);
-      reject(error);
-    };
-    const timeout = setTimeout(() => {
-      fail(new Error("Timed out waiting for service-account provisioning."));
-    }, 60_000);
-    server.once("error", fail);
-    server.listen(socketPath, () => chmodSync(socketPath, 0o600));
-  });
+  if (auth === "service-account") return "service:op-agent";
+  return settings.selectedSource?.startsWith("service:")
+    ? "service:op-agent"
+    : settings.selectedSource;
 }
 
 const lock = app.requestSingleInstanceLock();
@@ -770,26 +651,7 @@ else {
       return;
     }
     loadSettings();
-    if (provisionSocket)
-      try {
-        process.env.OP_SERVICE_ACCOUNT_TOKEN =
-          await receiveProvisionToken(provisionSocket);
-      } catch (error) {
-        writeVerification(
-          "failed",
-          error instanceof Error ? error.message : "provisioning",
-        );
-        app.quit();
-        return;
-      }
-    if (provisionServiceAccount && validName(provisionServiceAccount)) {
-      settings.sourceNames = [
-        ...new Set([...settings.sourceNames, provisionServiceAccount]),
-      ];
-      settings.selectedSource = `service:${provisionServiceAccount}`;
-      saveSettings();
-    }
-    current = startWorkspace(initialSource(), !!provisionServiceAccount);
+    current = startWorkspace(initialSource());
     rebuildMenu();
   });
 }

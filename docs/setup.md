@@ -624,17 +624,19 @@ remain in macOS Keychain and vault contents remain in memory. Up to four source
 workspaces stay warm in RAM. Quit stops all active and cached utility processes;
 closing the window only hides it for fast reopening.
 
-The Accounts menu supports named service accounts and 1Password desktop accounts.
+The Accounts menu supports the canonical op-agent service account and 1Password desktop accounts.
 ⌘1–9 switch among the first nine sources. Switching is blocked during saves and
-requires confirmation before discarding drafts. Service-account tokens are sent
-only to the utility process and Keychain. Desktop authentication verifies
+requires confirmation before discarding drafts. The service-account token remains
+solely in the op-agent Data Protection Keychain item and is read by a narrowly
+entitled signed helper bundled with Electron; the app never creates a duplicate
+credential. Desktop authentication verifies
 1Password's separately signed SDK library before loading it; install and unlock
 1Password and enable **Settings → Developer → Integrate with other apps**.
 
-Only TX Studio and CS Mini should hold a service-account token. TX M5 and TX MBA
-use desktop authentication. A separate Keychain entry,
-`better-env-vault-electron`, keeps the Electron rollout independent of the old
-native app and CLI credential.
+Only TX Studio and CS Mini hold the canonical op-agent service-account item. TX M5
+and TX MBA use desktop authentication. The development provisioning profile
+authorizes the same signed build on all four registered Macs; it does not copy a
+credential to any machine.
 
 To deploy the already-built signed app while preserving the previous app for
 rollback:
@@ -646,24 +648,21 @@ npm run app:deploy -- --desktop-account Xiao tx-m5
 # Install when live desktop verification is temporarily unavailable
 npm run app:deploy -- --signature-only tx-mba
 
-# Provision CS Mini from op-agent without putting the token in an argument or file
-op-agent run --no-masking -- npm run app:deploy -- \
-  --provision-host cs-mini cs-mini
+# Macs that already hold the canonical op-agent Data Protection item
+npm run app:deploy -- tx-studio cs-mini
 ```
 
 Deployment verifies the signer before transfer and again on the target, stages the
 old app as `previous.app`, registers the new bundle with LaunchServices, and
-restores the previous app if installation or live verification fails. Provisioning
-uses an owner-only Unix socket; the service-account token remains in memory and is
-saved by the signed Electron utility process. Copying or installing the app alone
-never copies credentials.
+restores the previous app if installation or live verification fails. Deployment
+never transfers, receives, or saves a service-account token. Copying or installing
+the app alone never copies credentials.
 
 Explicit launch choices remain available through both CLI names:
 
 ```bash
 envault app --auth desktop --account "Xiao"
-envault app --auth service-account \
-  --service-account-keychain better-env-vault-electron
+envault app --auth service-account
 envault app --schema /absolute/path/to/.env.schema
 ```
 

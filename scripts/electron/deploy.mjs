@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { access, mkdir } from "node:fs/promises";
 import { resolve, join } from "node:path";
 
@@ -19,7 +19,6 @@ const take = (flag) => {
   return value;
 };
 const desktopAccount = take("--desktop-account");
-const provisionHost = take("--provision-host");
 const signatureOnly = values.includes("--signature-only");
 if (signatureOnly) values.splice(values.indexOf("--signature-only"), 1);
 const hosts = values;
@@ -28,10 +27,6 @@ if (
   hosts.some((host) => !/^[a-zA-Z0-9][a-zA-Z0-9_.@-]*$/.test(host))
 )
   throw new Error("Specify SSH hosts to deploy.");
-if (provisionHost && !hosts.includes(provisionHost))
-  throw new Error("The provisioning host must also be a deployment host.");
-if (provisionHost && !process.env.OP_SERVICE_ACCOUNT_TOKEN)
-  throw new Error("Run provisioning deployment through op-agent.");
 if (
   desktopAccount &&
   (!desktopAccount.trim() ||
@@ -114,49 +109,10 @@ codesign --verify --deep --strict "$installed"
 `,
     );
 
-    if (host === provisionHost) {
-      const socket =
-        "$HOME/Library/Caches/better-env-vault-electron-installer/provision.sock";
-      const result =
-        "$HOME/Library/Caches/better-env-vault-electron-installer/provision.json";
-      ssh(
-        host,
-        `set -eu
-socket=${socket}
-result=${result}
-if [ -e "$socket" ]; then /bin/mv "$socket" "$socket.stale.$$"; fi
-if [ -e "$result" ]; then /bin/mv "$result" "$result.stale.$$"; fi
-env -u ELECTRON_RUN_AS_NODE open -n "$HOME/Applications/Better Env Vault.app" --args --provision-service-account=better-env-vault-electron --provision-socket="$socket" --verify-status="$result"
-deadline=$((SECONDS+30))
-while [ ! -S "$socket" ] && [ "$SECONDS" -lt "$deadline" ]; do sleep 1; done
-[ -S "$socket" ]
-`,
-      );
-      const sender = spawn(
-        "ssh",
-        [host, "/usr/bin/nc", "-w", "1", "-U", `${socket}`],
-        { stdio: ["pipe", "ignore", "inherit"] },
-      );
-      sender.stdin.end(process.env.OP_SERVICE_ACCOUNT_TOKEN);
-      await new Promise((resolvePromise, reject) => {
-        sender.once("error", reject);
-        // Apple nc can report 1 when the server closes a successfully written
-        // Unix socket. The signed app's result below is the authoritative ack.
-        sender.once("exit", resolvePromise);
-      });
-      ssh(
-        host,
-        `set -eu
-result=${result}
-deadline=$((SECONDS+100))
-while [ ! -s "$result" ] && [ "$SECONDS" -lt "$deadline" ]; do sleep 1; done
-/usr/bin/grep -q '"status":"ok"' "$result"
-`,
-      );
-    } else if (!signatureOnly) {
+    if (!signatureOnly) {
       const source = desktopAccount
         ? ` --verify-source=${JSON.stringify(`desktop:${desktopAccount}`)}`
-        : "";
+        : " --verify-source=service:op-agent --require-shared-credential";
       ssh(
         host,
         `set -eu
