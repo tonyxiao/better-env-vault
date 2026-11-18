@@ -1,0 +1,7 @@
+{
+  "name": "better-env-vault-electron-prototype",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "main.mjs"
+}

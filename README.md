@@ -40,5 +40,11 @@ The CLI opens your browser and keeps the server in the foreground; Ctrl+C or
 stopping the CLI stops the server. The `better-env-vault` commands remain
 available for exporting values and other operations.
 
+Run `npm run app:install` to build, sign, and install the self-contained Electron
+app, then open it with `envault app`. Its renderer is sandboxed, its Chromium data
+is ephemeral, and Electron-managed utility processes isolate and own the local
+1Password-backed servers without a separate watchdog. See the setup guide for
+deployment and authentication details.
+
 Run `npm test` for the isolated test suite. Live testing uses dedicated disposable
 vaults and runs only through the explicit `npm run test:local` command.

@@ -587,7 +587,7 @@ and check **Settings → Developer → Integrate with other apps**. If a vault i
 unavailable, verify its ID and account selection. If a save is rejected as stale,
 refresh before editing again.
 
-## Native macOS application
+## Electron macOS application
 
 From this stable checkout, with Xcode Command Line Tools and the installed signing
 identity `Apple Development: Tony Xiao (9QULCFJ59K)`, run:
@@ -600,183 +600,89 @@ envault app
 ```
 
 This builds, signs, verifies, and installs `~/Applications/Better Env Vault.app`.
-`npm run app:build` creates the signed deliverable in
-`.local/macos/Better Env Vault.app` without installing it. Both commands require
-Tony's actual signing identity and fail if it is unavailable; there is no ad-hoc
-signing fallback. The bundle ID is `com.txlforge.better-env-vault`. The custom icon is generated
-from `scripts/macos/icon.swift` with `npm run app:icon`; the build packages all
-macOS icon resolutions into `AppIcon.icns`. The build
-uses the lockfile, a SHA-256-pinned official Node 24.22.3 macOS runtime for the
-host architecture, compiled TypeScript, and the production React assets. The
-installed app needs neither global Node nor this checkout. Rebuild separately on
-Apple Silicon and Intel for those respective architectures. Keep the bundled
-Node version and both pinned checksums current when applying runtime updates.
-The standard signed build uses the same macOS Keychain implementation as
-`envault auth`. It has no shared-Keychain entitlement or embedded development
-profile, so the same architecture's signed app can be copied to your other Macs.
-To copy the verified portable build to the other Macs and run their installed-app
-checks, use `npm run app:deploy -- tx-m5 tx-mba cs-mini`. The command checks the
-signer and target architecture, preserves the old app until the replacement is
-verified, and leaves credentials on each Mac. For desktop-only devices, use
-`npm run app:deploy -- --desktop-account Xiao tx-m5 tx-mba` to verify via that
-account. If a desktop device is locked, `--signature-only` installs and checks
-the signature without claiming live inventory verification; run `app:verify`
-after unlocking it. Installing or copying a build never provisions credentials; use
-`app:connect` only on explicitly selected machines.
+`npm run app:build` creates the signed deliverable at
+`.local/electron/Better Env Vault.app` without installing it. The bundle ID is
+`com.txlforge.better-env-vault`; there is no ad-hoc signing fallback. The app
+bundles Electron, the compiled TypeScript backend, production React assets, and
+runtime dependencies, so the installed app does not need global Node or this
+checkout. Build each target architecture separately.
 
-Only TX Studio and CS Mini should hold the service-account token. TX M5 and
-TX MBA use desktop authentication. Copying the signed app must not copy tokens.
-Each explicitly provisioned Mac keeps its own app credential in Keychain. Use the native Service Account
-screen, or provision the installed signed app directly from the existing headless
-credential without placing its value in arguments, logs, or files:
+The Electron main process owns native windows, menus, source switching, and
+lifecycle. Each source runs the existing TypeScript server in an Electron
+`utilityProcess`; Electron/Chromium reap those utility processes when the main
+process exits, including abrupt `SIGKILL`, so no custom watchdog is used. The
+renderer is sandboxed with context isolation enabled and Node integration
+disabled. Navigation is limited to the random loopback origin, popups are denied,
+permissions are denied, and the existing nonce, HttpOnly-cookie, Host, origin,
+mutation-token, and no-store protections remain active.
 
-```bash
-op-agent run --no-masking -- npm run app:connect
-op-agent run --no-masking -- npm run app:connect -- cs-mini
-```
+Chromium uses a new nonpersistent session for each workspace and an ephemeral
+`userData` directory for each launch. The only persistent app data is source
+metadata in
+`~/Library/Application Support/Better Env Vault/settings.json`; credentials
+remain in macOS Keychain and vault contents remain in memory. Up to four source
+workspaces stay warm in RAM. Quit stops all active and cached utility processes;
+closing the window only hides it for fast reopening.
 
-The command verifies the installed signature and sends the token through an
-anonymous pipe and an owner-only Unix socket to the GUI app. The GUI process uses
-the existing core to save it as `better-env-vault` in macOS Keychain, then quits.
-Running storage in the GUI session supports the normal Keychain unlock/approval
-flow; an SSH process alone may be denied access to the login keychain. The app
-runs directly through the SDK after this one-time setup and does not depend on
-`op-agent`, `op`, global Node, or the 1Password desktop app for service-account use.
-The original headless Data Protection credential remains available to its tools.
+The Accounts menu supports named service accounts and 1Password desktop accounts.
+⌘1–9 switch among the first nine sources. Switching is blocked during saves and
+requires confirmation before discarding drafts. Service-account tokens are sent
+only to the utility process and Keychain. Desktop authentication verifies
+1Password's separately signed SDK library before loading it; install and unlock
+1Password and enable **Settings → Developer → Integrate with other apps**.
 
-Shared Data Protection access is an optional build capability. Such a build needs
-a development profile containing every target Mac, the required signing certificate,
-and both Keychain groups. Copying a source-only profile causes macOS to terminate
-the app on other Macs before launch. For that capability, explicitly opt in:
+Only TX Studio and CS Mini should hold a service-account token. TX M5 and TX MBA
+use desktop authentication. A separate Keychain entry,
+`better-env-vault-electron`, keeps the Electron rollout independent of the old
+native app and CLI credential.
+
+To deploy the already-built signed app while preserving the previous app for
+rollback:
 
 ```bash
-npm run app:install -- --shared-keychain --profile /path/to/all-macs.provisionprofile --devices-file tmp/macos/devices.json
+# Desktop-authenticated Mac
+npm run app:deploy -- --desktop-account Xiao tx-m5
+
+# Install when live desktop verification is temporarily unavailable
+npm run app:deploy -- --signature-only tx-mba
+
+# Provision CS Mini from op-agent without putting the token in an argument or file
+op-agent run --no-masking -- npm run app:deploy -- \
+  --provision-host cs-mini cs-mini
 ```
 
-The inventory is a JSON array of `{ "host": "tx-m5", "udid": "<Provisioning UDID>" }`
-records. Obtain each Provisioning UDID with `system_profiler SPHardwareDataType`
-on the target. On Apple Silicon, this differs from the hardware UUID returned
-by `ioreg`; profiles must be checked against the Provisioning UDID.
-The build checks the certificate, expiry, app ID, Keychain groups, and every target
-UUID before installing. A successful shared-Keychain build caches its public
-profile and inventory in `.local/macos/` for subsequent shared-Keychain builds.
-There is no ad-hoc signing fallback. The installed app never invokes the helper.
+Deployment verifies the signer before transfer and again on the target, stages the
+old app as `previous.app`, registers the new bundle with LaunchServices, and
+restores the previous app if installation or live verification fails. Provisioning
+uses an owner-only Unix socket; the service-account token remains in memory and is
+saved by the signed Electron utility process. Copying or installing the app alone
+never copies credentials.
 
-The application opens the existing vault browser and selects authentication in
-this order: an explicit desktop or named Keychain selection, an inherited
-`OP_SERVICE_ACCOUNT_TOKEN`, the app's saved `better-env-vault` Keychain entry,
-the existing Data Protection service-account item in an opted-in shared-Keychain
-build, then desktop authentication
-when no service-account credential is available. An explicitly selected service
-account never silently falls back to a different identity after an error.
-
-Service-account authentication connects the existing SDK directly to 1Password;
-it needs neither the desktop app nor the `op` CLI. For an opted-in shared-Keychain build, the existing Data Protection
-item is service `1Password Service Account Token`, account `money-redux`, in
-access group `H82Z395PDV.com.tonyxiao.codex-keychain-helper`. The signed native
-shell queries only that exact item without prompting, passes the credential only
-to its bundled child process in memory, and does not copy or migrate it to another
-store. The item retains its `AfterFirstUnlockThisDeviceOnly` accessibility.
-
-Use the Service Account menu to enter or replace a token in a native secure field.
-It travels over an anonymous pipe to the existing `storeServiceAccountToken`
-implementation and is saved as `better-env-vault`, or the explicit named entry.
-It never enters the browser, URLs, command arguments, preferences, or log output.
-Choose only the vault access and read/write permissions required for your work.
-`envault app --auth service-account` opens this setup screen if no token exists.
-`envault auth store better-env-vault` remains a supported stdin-only alternative.
-
-Desktop fallback connects through the existing SDK using the account name
-shown in 1Password's sidebar. It needs the desktop app's SDK integration, not
-the `op` CLI. Existing CLI defaults and schema authentication settings are
-preserved. Credentials are never app arguments or preferences:
+Explicit launch choices remain available through both CLI names:
 
 ```bash
 envault app --auth desktop --account "Xiao"
-envault app --auth service-account --service-account-keychain <entry-name>
+envault app --auth service-account \
+  --service-account-keychain better-env-vault-electron
 envault app --schema /absolute/path/to/.env.schema
 ```
 
-`better-env-vault app` accepts the same options. The app's Open Schema menu supports
-multiple schemas; Browse Vaults returns to vault browsing. Refresh revalidates
-contents in the existing session. All
-editing, notes, search, masking, and schema resolution use the same UI and core
-as the CLI server. Schema mode reads authentication settings from each schema.
-Selected schemas and browser state are not persisted. Native account names are
-saved as metadata for the next launch; service-account credentials stay in Keychain.
+The native AppKit/WKWebView implementation remains available for rollback and
+comparison under `npm run app:native:build`, `app:native:install`, and
+`app:native:deploy`. Its connection helper remains `npm run app:connect`.
+The default `app:*` commands build and operate the Electron app.
 
-The shell starts its bundled server on a random IPv4 loopback port. A one-use
-per-launch bootstrap credential travels through anonymous pipes and a document
-startup script, then the existing session endpoint sets an HttpOnly session cookie
-in a nonpersistent WKWebView. Neither credential nor payload travels in an app URL.
-All existing origin, Host, mutation-token, and no-store checks remain active.
-Navigation outside the embedded origin and popup windows are blocked. No WebKit
-state restoration, persistent website data store, request logging, or payload
-logging is enabled. Node inherits only the home directory, a fixed executable
-search path, locale, and optional existing 1Password authentication environment;
-Node diagnostic flags and SDK logging settings are not inherited. Core dumps are
-disabled. Tokens stay in Keychain or memory; vault contents remain in memory
-apart from explicit user-authorized schema edits through the existing editor.
-Closing the last window retains the workspace in RAM for immediate reopening.
-Quit (⌘Q) terminates and reaps every active and cached server. Pipe closure
-and a separate parent-watchdog thread also stop it if the shell disappears
-unexpectedly, even while the desktop SDK blocks the main server thread.
-
-The bundled runtime permits loading 1Password's separately signed desktop SDK
-library. Before starting a desktop session, the app verifies that library against
-1Password's Apple signing team. The native shell keeps library validation enabled.
-
-The compact Source switcher in the top-right title bar and Accounts menu support multiple named service accounts,
-individual desktop accounts, and the current schema workspace. ⌘1–9 select the
-first nine entries; additional entries remain available in the menu. Add Service
-Account stores a separate named token through the existing native Keychain path.
-Add Desktop Account accepts the account name shown in the 1Password sidebar.
-If no saved token or account name is configured, a native account-name prompt
-connects through the SDK directly, without requiring the `op` CLI. Only these
-native account names are saved in `~/Library/Application Support/Better Env Vault/desktop-accounts.json`;
-no credentials, browser payloads, or vault contents are saved there. The native app does not invoke the 1Password CLI for account discovery; the CLI
-commands retain their existing automatic discovery behavior. Account selection never blocks the initial native window. A selected
-identity never silently falls back to another identity. Pending saves block source
-changes; unsaved drafts require confirmation before discarding.
-
-The custom Dock/Finder icon is generated from `scripts/macos/icon.swift`. Run
-`npm run app:icon` to reproduce the PNG master; the app build packages every
-required icon size into `AppIcon.icns`.
-
-The app follows system light/dark appearance live, including grids and JSON editors.
-No theme preference is saved. Up to four inactive source workspaces retain their
-own server, random port, nonce/session, nonpersistent WebView, and UI state in RAM.
-Returning to a recent source swaps the view immediately; after 30 seconds since its
-last load/refresh, the existing UI revalidates in the background while retaining the
-previous inventory until the stream completes. Refresh (⌘R) uses the same guarded
-path, without restarting Node. Drafts and pending saves prevent revalidation from
-replacing an editor. The default `envault app` reuses the running application;
-explicit launch options open a separate configured instance. A true Quit clears
-all cached workspaces, so a cold launch still requires authentication/network reads.
-No secret-bearing data is cached on disk to disguise that cost.
-
-To check the installed app's actual WebKit UI and authenticated vault inventory
-without outputting any vault names, tokens, values, or browser payloads:
+Run the installed-app verification with:
 
 ```bash
 npm run app:verify
-# Verify a live source switch too:
-# After adding a desktop account: npm run app:verify -- --verify-source desktop:Xiao
-# Exercise inherited SDK session → named Keychain source without another token:
-op-agent run --no-masking -- npm run app:verify -- --inherited-session --verify-source service:better-env-vault
-# Or: npm run app:verify -- --account <account-uuid>
-# Add --account or --auth/--service-account-keychain as above when needed.
+npm run app:verify -- --verify-source=desktop:Xiao
 ```
 
-This verifies the installed signature, observes the random loopback listener,
-checks server termination and port closure on exit, and checks that no app-specific
-persistent WebKit data, HTTP storage, cache, saved state, or preferences were created.
-It also closes/reopens the window and restores the identical warm WebView/server
-in under 500 ms, without changing the session or reading vault data again.
-It runs the installed application, requires a successful session and a nonempty
-inventory from the existing provider path, prints only fixed success/failure
-markers, and quits with a corresponding exit code. It performs no vault mutations.
-The isolated `npm test` suite also checks service-account precedence, Data
-Protection selection, desktop fallback, explicit authentication choices, secure
-setup selection, private-pipe startup, session replay
-rejection, cross-launch isolation, no-store responses, and shutdown on pipe closure.
+The verifier checks the installed signature, loads a live authenticated inventory
+without printing vault data, proves utility cleanup after normal quit, kills the
+Electron main process while a utility is deliberately blocked and proves the
+utility is reaped, and rejects unexpected persistent Chromium storage. Success is
+reported as
+`ELECTRON_SIGNATURE_INVENTORY_LIFECYCLE_AND_STORAGE_OK`. The isolated
+`npm test` suite performs no live vault mutations.

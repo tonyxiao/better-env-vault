@@ -4,6 +4,9 @@
     "packages/**/*.ts",
     "apps/web/src/server.ts",
     "apps/macos/server.ts",
+    "apps/macos/configuration.ts",
+    "apps/macos/sources.ts",
+    "apps/electron/*.ts",
     "scripts/macos/profile.ts"
   ],
   "exclude": ["tests", "apps/web/src/main.tsx"]

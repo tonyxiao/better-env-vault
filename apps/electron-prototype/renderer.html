@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Better Env Vault — Electron Prototype</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font: 15px system-ui;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: Canvas;
+        color: CanvasText;
+      }
+      main {
+        width: min(34rem, calc(100vw - 3rem));
+      }
+      .card {
+        border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+        border-radius: 14px;
+        padding: 1.5rem;
+      }
+      label {
+        display: grid;
+        gap: 0.4rem;
+      }
+      input,
+      button {
+        font: inherit;
+        padding: 0.6rem 0.75rem;
+      }
+      button {
+        margin-top: 0.8rem;
+      }
+      pre {
+        white-space: pre-wrap;
+        min-height: 3rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1>Electron utility-process prototype</h1>
+      <p>
+        The renderer is sandboxed. The 1Password SDK runs only in a managed
+        utility process.
+      </p>
+      <label>Desktop account name <input id="account" value="Xiao" /></label>
+      <button id="probe">Test desktop authentication</button>
+      <pre id="result">Not tested.</pre>
+    </main>
+    <script>
+      const button = document.querySelector("#probe");
+      const result = document.querySelector("#result");
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        result.textContent = "Connecting…";
+        result.textContent = JSON.stringify(
+          await window.prototype.probe(
+            document.querySelector("#account").value,
+          ),
+          null,
+          2,
+        );
+        button.disabled = false;
+      });
+    </script>
+  </body>
+</html>

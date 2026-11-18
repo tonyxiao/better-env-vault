@@ -14,9 +14,11 @@
   },
   "scripts": {
     "dev": "tsx packages/cli/src/index.ts",
-    "app:build": "node scripts/macos/build.mjs",
-    "app:install": "node scripts/macos/build.mjs --install",
-    "app:verify": "node scripts/macos/verify.mjs",
+    "app:build": "node scripts/electron/build.mjs",
+    "app:install": "node scripts/electron/build.mjs --install",
+    "app:native:build": "node scripts/macos/build.mjs",
+    "app:native:install": "node scripts/macos/build.mjs --install",
+    "app:verify": "node scripts/electron/verify.mjs",
     "app:connect": "node scripts/macos/connect.mjs",
     "build": "tsc -p tsconfig.build.json && vite build --config apps/web/vite.config.ts",
     "typecheck": "tsc --noEmit && tsc -p apps/web/tsconfig.json --noEmit",
@@ -36,8 +38,12 @@
     "test:vault-stream": "tsx scripts/test-vault-stream.ts",
     "test:vault-notes": "tsx scripts/test-vault-notes.ts",
     "test:keyboard": "tsx scripts/test-keyboard.ts",
-    "app:deploy": "node scripts/macos/deploy.mjs",
-    "app:icon": "xcrun swift scripts/macos/icon.swift apps/macos/assets/AppIcon.png"
+    "app:deploy": "node scripts/electron/deploy.mjs",
+    "app:native:deploy": "node scripts/macos/deploy.mjs",
+    "app:icon": "xcrun swift scripts/macos/icon.swift apps/macos/assets/AppIcon.png",
+    "electron:prototype": "node scripts/electron-prototype/launch.mjs",
+    "electron:prototype:package": "node scripts/electron-prototype/package.mjs",
+    "electron:prototype:verify": "node scripts/electron-prototype/verify.mjs"
   },
   "engines": {
     "node": ">=22"
@@ -60,11 +66,13 @@
     "zod": "4.1.12"
   },
   "devDependencies": {
+    "@electron/packager": "^20.3.0",
     "@tailwindcss/vite": "4.3.3",
     "@types/node": "24.10.0",
     "@types/react": "19.2.2",
     "@types/react-dom": "19.2.2",
     "@vitejs/plugin-react": "5.0.4",
+    "electron": "^45.3.4",
     "playwright-core": "1.63.0",
     "prettier": "3.6.2",
     "tailwindcss": "4.3.3",

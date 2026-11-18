@@ -1,0 +1,7 @@
+{
+  "name": "better-env-vault-electron-dev",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "../../dist/apps/electron/main.js"
+}

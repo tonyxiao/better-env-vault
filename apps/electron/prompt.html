@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root {
+        color-scheme: light dark;
+        font: 14px system-ui;
+      }
+      body {
+        margin: 0;
+        background: Canvas;
+        color: CanvasText;
+      }
+      form {
+        padding: 22px;
+        display: grid;
+        gap: 14px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 18px;
+      }
+      p {
+        margin: -5px 0 0;
+        color: color-mix(in srgb, CanvasText 68%, transparent);
+      }
+      input {
+        font: inherit;
+        padding: 8px 10px;
+        border-radius: 7px;
+        border: 1px solid color-mix(in srgb, CanvasText 24%, transparent);
+      }
+      footer {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      button {
+        font: inherit;
+        padding: 7px 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <form>
+      <h1></h1>
+      <p></p>
+      <input required autocomplete="off" />
+      <footer>
+        <button type="button">Cancel</button
+        ><button type="submit">Continue</button>
+      </footer>
+    </form>
+    <script>
+      const parameters = new URLSearchParams(location.search);
+      document.querySelector("h1").textContent =
+        parameters.get("title") || "Better Env Vault";
+      document.querySelector("p").textContent = parameters.get("message") || "";
+      const input = document.querySelector("input");
+      input.type = parameters.get("secret") === "1" ? "password" : "text";
+      input.value = parameters.get("value") || "";
+      document.querySelector("form").addEventListener("submit", (event) => {
+        event.preventDefault();
+        window.bevPrompt.submit(input.value);
+      });
+      document
+        .querySelector('button[type="button"]')
+        .addEventListener("click", () => window.bevPrompt.cancel());
+      addEventListener("keydown", (event) => {
+        if (event.key === "Escape") window.bevPrompt.cancel();
+      });
+      input.select();
+    </script>
+  </body>
+</html>
