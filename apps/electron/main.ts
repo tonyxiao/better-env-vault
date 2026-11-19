@@ -137,6 +137,7 @@ const argumentsFor = (name: string, values = process.argv) => {
 const verifyStatus = argument("verify-status");
 const verifySource = argument("verify-source");
 const lifecycleStatus = argument("lifecycle-status");
+const lifecycleBackend = argument("lifecycle-backend");
 const settingsDirectory = join(app.getPath("appData"), "Better Env Vault");
 const settingsPath = join(settingsDirectory, "settings.json");
 let settings: Settings = {
@@ -725,23 +726,41 @@ else {
   });
   void app.whenReady().then(async () => {
     if (lifecycleStatus) {
-      const broker = createBackend("service:op-agent");
-      broker.on("message", (value) => {
-        const record = value as ReadyRecord;
-        if (!Number.isSafeInteger(record.backendPid) || !broker.pid) return;
-        writeFileSync(
-          lifecycleStatus,
-          JSON.stringify({
-            mainPid: process.pid,
-            brokerPid: broker.pid,
-            backendPid: record.backendPid,
-          }),
-          { mode: 0o600 },
+      if (lifecycleBackend === "op-agent") {
+        const broker = createBackend("service:op-agent");
+        broker.on("message", (value) => {
+          const record = value as ReadyRecord;
+          if (!Number.isSafeInteger(record.backendPid) || !broker.pid) return;
+          writeFileSync(
+            lifecycleStatus,
+            JSON.stringify({
+              mainPid: process.pid,
+              brokerPid: broker.pid,
+              backendPid: record.backendPid,
+            }),
+            { mode: 0o600 },
+          );
+        });
+        broker.once("spawn", () =>
+          broker.postMessage({ type: "lifecycle-probe" }),
         );
-      });
-      broker.once("spawn", () =>
-        broker.postMessage({ type: "lifecycle-probe" }),
-      );
+      } else {
+        const utility = utilityProcess.fork(
+          join(runtimeDirectory, "utility.js"),
+          ["--block"],
+          {
+            serviceName: "Better Env Vault blocked lifecycle probe",
+            stdio: "ignore",
+          },
+        );
+        utility.once("spawn", () =>
+          writeFileSync(
+            lifecycleStatus,
+            JSON.stringify({ mainPid: process.pid, utilityPid: utility.pid }),
+            { mode: 0o600 },
+          ),
+        );
+      }
       return;
     }
     loadSettings();

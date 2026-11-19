@@ -87,19 +87,32 @@ for (const pid of result.backendPids ?? [])
     throw new Error(`Token-bearing backend ${pid} survived normal app quit.`);
 
 const lifecyclePath = await fresh("lifecycle");
-const main = spawn(executable, [`--lifecycle-status=${lifecyclePath}`], {
-  env: launchEnvironment,
-  stdio: "ignore",
-});
+const main = spawn(
+  executable,
+  [
+    `--lifecycle-status=${lifecyclePath}`,
+    ...(requireOpAgentBackend ? ["--lifecycle-backend=op-agent"] : []),
+  ],
+  {
+    env: launchEnvironment,
+    stdio: "ignore",
+  },
+);
 const lifecycle = await waitForFile(lifecyclePath, 10_000);
 process.kill(lifecycle.mainPid, "SIGKILL");
 const deadline = Date.now() + 5_000;
 while (
-  (existsProcess(lifecycle.brokerPid) || existsProcess(lifecycle.backendPid)) &&
+  (existsProcess(lifecycle.utilityPid) ||
+    existsProcess(lifecycle.brokerPid) ||
+    existsProcess(lifecycle.backendPid)) &&
   Date.now() < deadline
 )
   await delay(50);
 await unlink(lifecyclePath);
+if (existsProcess(lifecycle.utilityPid))
+  throw new Error(
+    `Utility process ${lifecycle.utilityPid} survived forced main-process death.`,
+  );
 if (existsProcess(lifecycle.brokerPid))
   throw new Error(
     `op-agent broker ${lifecycle.brokerPid} survived forced main-process death.`,
