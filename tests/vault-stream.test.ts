@@ -152,6 +152,7 @@ it("keeps environment order stable and rejects stale streamed results after a sa
     environments: envs,
     matrices: [],
     errors: [],
+    warnings: [],
     auth: "desktop",
   };
   let catalog = applyCatalogEvent(initial, {

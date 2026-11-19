@@ -10,6 +10,7 @@ export interface VaultCatalog {
   environments: VaultEnvironment[];
   matrices: { id: string; matrix: Matrix }[];
   errors: { id: string; name: string; error: string }[];
+  warnings: { id: string; name: string; warnings: string[] }[];
   auth: "desktop" | "service-account";
 }
 export type VaultCatalogEvent =
@@ -18,7 +19,7 @@ export type VaultCatalogEvent =
       environments: VaultEnvironment[];
       auth: VaultCatalog["auth"];
     }
-  | { type: "vault"; id: string; matrix: Matrix; error?: string }
+  | { type: "vault"; id: string; matrix: Matrix; warnings?: string[] }
   | { type: "error"; id: string; error: string }
   | { type: "complete" };
 
@@ -31,6 +32,7 @@ export function applyCatalogEvent(
       environments: event.environments,
       matrices: [],
       errors: [],
+      warnings: [],
       auth: event.auth,
     };
   if (event.type === "complete") return catalog;
@@ -53,8 +55,20 @@ export function applyCatalogEvent(
     matrices: [...matrices].sort((a, b) => order.get(a.id)! - order.get(b.id)!),
     errors: [
       ...catalog.errors.filter((error) => error.id !== event.id),
-      ...(event.error
+      ...(event.type === "error"
         ? [{ id: event.id, name: environment.name, error: event.error }]
+        : []),
+    ].sort((a, b) => order.get(a.id)! - order.get(b.id)!),
+    warnings: [
+      ...(catalog.warnings ?? []).filter((warning) => warning.id !== event.id),
+      ...(event.type === "vault" && event.warnings?.length
+        ? [
+            {
+              id: event.id,
+              name: environment.name,
+              warnings: event.warnings,
+            },
+          ]
         : []),
     ].sort((a, b) => order.get(a.id)! - order.get(b.id)!),
   };

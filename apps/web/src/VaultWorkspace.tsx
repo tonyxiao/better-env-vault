@@ -20,6 +20,7 @@ import {
 } from "react-data-grid";
 import {
   Info,
+  AlertTriangle,
   ChevronDown,
   ChevronRight,
   LoaderCircle,
@@ -374,14 +375,17 @@ export function VaultWorkspace({
         ) {
           const data = (await response.json()) as VaultCatalog;
           if (!alive.current || id !== loadId.current) return;
-          catalogRef.current = data;
-          setCatalog(data);
+          const normalized = { ...data, warnings: data.warnings ?? [] };
+          catalogRef.current = normalized;
+          setCatalog(normalized);
           setLoadedVaults(new Set(data.environments.map((env) => env.id)));
           setProgress({
             completed: data.environments.length,
             total: data.environments.length,
           });
-          const available = new Set(catalogRows(data).map((row) => row.id));
+          const available = new Set(
+            catalogRows(normalized).map((row) => row.id),
+          );
           setSelected(
             (previous) =>
               new Set([...previous].filter((id) => available.has(id))),
@@ -402,7 +406,13 @@ export function VaultWorkspace({
             throw new RequestError(event.error, event.code);
           if (event.type === "start") {
             const data = applyCatalogEvent(
-              { environments: [], matrices: [], errors: [], auth: event.auth },
+              {
+                environments: [],
+                matrices: [],
+                errors: [],
+                warnings: [],
+                auth: event.auth,
+              },
               event,
             );
             incomingCatalog = data;
@@ -573,12 +583,14 @@ export function VaultWorkspace({
   function patchMatrix(id: string, matrix: Matrix) {
     const previous = catalogRef.current;
     if (!previous) return;
-    const warning = previous.errors.find((error) => error.id === id)?.error;
+    const warnings = previous.warnings.find(
+      (warning) => warning.id === id,
+    )?.warnings;
     const next = applyCatalogEvent(previous, {
       type: "vault",
       id,
       matrix,
-      error: warning,
+      warnings,
     });
     catalogRef.current = next;
     setCatalog(next);
@@ -597,6 +609,7 @@ export function VaultWorkspace({
         environments: [row.environment],
         matrices: [{ id: row.vaultId, matrix }],
         errors: [],
+        warnings: [],
         auth: "desktop",
       }).find((candidate) => candidate.id === row.id);
       if (!freshRow)
@@ -1201,6 +1214,44 @@ export function VaultWorkspace({
           <div role="alert" className="alert error">
             {error}
           </div>
+        ) : null}
+        {catalog?.warnings.length ? (
+          <details className="alert warning catalog-warning">
+            <summary>
+              <AlertTriangle aria-hidden="true" />
+              <span>
+                {catalog.warnings.reduce(
+                  (count, entry) => count + entry.warnings.length,
+                  0,
+                )}{" "}
+                credential
+                {catalog.warnings.reduce(
+                  (count, entry) => count + entry.warnings.length,
+                  0,
+                ) === 1
+                  ? " was"
+                  : "s were"}{" "}
+                skipped. Valid credentials are still available.
+              </span>
+              <span className="warning-action">Review details</span>
+            </summary>
+            <div className="warning-details">
+              {catalog.warnings.map((entry) => (
+                <section key={entry.id}>
+                  <strong>{entry.name}</strong>
+                  <ul>
+                    {entry.warnings.map((warning) => (
+                      <li key={warning}>{warning}</li>
+                    ))}
+                  </ul>
+                </section>
+              ))}
+              <p>
+                Rename these items to environment-variable names, or change
+                their 1Password category if they are not environment variables.
+              </p>
+            </div>
+          </details>
         ) : null}
         {Object.entries(operations)
           .filter(([, operation]) => operation.status === "error")

@@ -180,6 +180,7 @@ export class VaultBrowser {
       matrix: Awaited<ReturnType<VaultBrowser["matrix"]>>;
     }[] = [];
     const errors: { id: string; name: string; error: string }[] = [];
+    const warnings: { id: string; name: string; warnings: string[] }[] = [];
     let next = 0;
     await Promise.all(
       Array.from(
@@ -193,9 +194,15 @@ export class VaultBrowser {
               includeValues,
               fingerprints,
             );
-            if (event.type === "vault")
+            if (event.type === "vault") {
               matrices.push({ id: env.id, matrix: event.matrix });
-            if (event.error)
+              if (event.warnings?.length)
+                warnings.push({
+                  id: env.id,
+                  name: env.name,
+                  warnings: event.warnings,
+                });
+            } else
               errors.push({ id: env.id, name: env.name, error: event.error });
           }
         },
@@ -204,10 +211,12 @@ export class VaultBrowser {
     const order = new Map(environments.map((env, index) => [env.id, index]));
     matrices.sort((a, b) => order.get(a.id)! - order.get(b.id)!);
     errors.sort((a, b) => order.get(a.id)! - order.get(b.id)!);
+    warnings.sort((a, b) => order.get(a.id)! - order.get(b.id)!);
     return {
       environments,
       matrices,
       errors,
+      warnings,
       auth:
         this.options.auth ??
         (this.options.serviceAccountKeychain ||
@@ -235,11 +244,7 @@ export class VaultBrowser {
         type: "vault",
         id,
         matrix,
-        ...(warnings.length
-          ? {
-              error: `Some credentials were skipped. ${warnings.join(" ")} Review these items in 1Password.`,
-            }
-          : {}),
+        ...(warnings.length ? { warnings } : {}),
       };
     } catch (error) {
       if (

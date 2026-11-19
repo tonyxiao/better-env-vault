@@ -92,7 +92,12 @@ it("refreshes all environments and skips malformed items without hiding their va
     version: 1,
   });
   const catalog = await browser.catalog(true);
-  expect(catalog.errors[0]).toMatchObject({ id: staging, name: "Staging" });
+  expect(catalog.errors).toEqual([]);
+  expect(catalog.warnings[0]).toMatchObject({
+    id: staging,
+    name: "Staging",
+    warnings: [expect.stringContaining("bad name")],
+  });
   expect(catalog.matrices).toHaveLength(3);
   expect(
     catalogRows(catalog as VaultCatalog).some((row) => row.vaultId === staging),
