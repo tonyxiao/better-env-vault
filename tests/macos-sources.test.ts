@@ -102,3 +102,16 @@ it("restores native account names independently of the optional op CLI metadata"
     sources.find((source) => source.id === "desktop:Work Team")?.label,
   ).toBe("Desktop · Work Team");
 });
+
+it("identifies and labels the op-agent broker without a duplicate credential", () => {
+  const config = {
+    schemas: [],
+    discovery: { auth: "service-account" as const },
+    serviceAccountBroker: "op-agent" as const,
+  };
+  expect(sourceId(config)).toBe("service:op-agent");
+  expect(appSources(config, [], [])[0]).toMatchObject({
+    id: "service:op-agent",
+    label: "Service Account · op-agent",
+  });
+});

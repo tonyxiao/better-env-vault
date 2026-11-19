@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { access } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 import { safeError } from "../../packages/core/src/errors.js";
 import { startServer } from "../web/src/server.js";
@@ -15,10 +16,32 @@ type ParentPort = {
   on(event: "message", listener: (message: { data: unknown }) => void): void;
   postMessage(message: unknown): void;
 };
-const parentPort = (process as NodeJS.Process & { parentPort?: ParentPort })
-  .parentPort;
+const electronParentPort = (
+  process as NodeJS.Process & { parentPort?: ParentPort }
+).parentPort;
+const stdioBackend = process.argv.includes("--stdio-backend");
+const stdioParentPort: ParentPort = {
+  on(_event, listener) {
+    const lines = createInterface({ input: process.stdin });
+    lines.on("line", (line) => {
+      try {
+        listener({ data: JSON.parse(line) });
+      } catch {
+        stdioParentPort.postMessage({
+          fatal: true,
+          error: "The op-agent backend protocol received invalid input.",
+        });
+      }
+    });
+  },
+  postMessage(message) {
+    process.stdout.write(`${JSON.stringify(message)}\n`);
+  },
+};
+const parentPort =
+  electronParentPort ?? (stdioBackend ? stdioParentPort : undefined);
 if (!parentPort)
-  throw new Error("Electron utility process requires a parent port.");
+  throw new Error("Electron backend requires a parent port or op-agent pipe.");
 if (process.argv.includes("--block"))
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
 
@@ -61,37 +84,9 @@ async function verifyDesktopLibrary() {
   return false;
 }
 
-async function loadDataProtectionToken() {
-  if (process.platform !== "darwin") return false;
-  try {
-    const { stdout } = await promisify(execFile)(
-      join(
-        process.resourcesPath,
-        "DataProtectionCredential.app/Contents/MacOS/DataProtectionCredential",
-      ),
-      [],
-      { timeout: 10_000, maxBuffer: 65_536, encoding: "utf8" },
-    );
-    if (
-      stdout.startsWith("ops_") &&
-      stdout.length <= 65_536 &&
-      !/[\r\n\0]/.test(stdout)
-    )
-      process.env.BEV_DATA_PROTECTION_SERVICE_ACCOUNT_TOKEN = stdout;
-    return !!process.env.BEV_DATA_PROTECTION_SERVICE_ACCOUNT_TOKEN;
-  } catch (error) {
-    const detail = error as { code?: string | number; signal?: string };
-    send({
-      sharedCredentialAvailable: false,
-      sharedCredentialError: String(detail.code ?? detail.signal ?? "unknown"),
-    });
-    /* This Mac may intentionally use 1Password desktop authentication. */
-    return false;
-  }
-}
-
 function sourceRecord() {
   return {
+    ...(stdioBackend ? { backendPid: process.pid } : {}),
     selectedSource: sourceId(config!),
     sources: appSources(config!, config!.sourceNames ?? [], []),
   };
@@ -118,30 +113,13 @@ async function start() {
 }
 
 async function begin(input: AppConfiguration) {
-  const sharedCredentialAvailable = await loadDataProtectionToken();
-  if (sharedCredentialAvailable) send({ sharedCredentialAvailable: true });
-  if (
-    input.discovery?.auth === "service-account" &&
-    !sharedCredentialAvailable
-  ) {
-    send({
-      fatal: true,
-      error: "The shared op-agent Data Protection credential is unavailable.",
-    });
-    return;
-  }
   config = await appConfiguration(input, {
-    environmentTokenAvailable: false,
-    dataProtectionTokenAvailable: sharedCredentialAvailable,
+    environmentTokenAvailable: !!process.env.OP_SERVICE_ACCOUNT_TOKEN,
+    dataProtectionTokenAvailable: false,
     readToken: async () => {
       throw new Error("Electron does not use duplicate Keychain credentials.");
     },
   });
-  if (config.useDataProtectionToken) {
-    process.env.OP_SERVICE_ACCOUNT_TOKEN =
-      process.env.BEV_DATA_PROTECTION_SERVICE_ACCOUNT_TOKEN;
-    delete process.env.BEV_DATA_PROTECTION_SERVICE_ACCOUNT_TOKEN;
-  }
   if (
     !config.schemas.length &&
     config.discovery?.auth === "desktop" &&
@@ -156,6 +134,10 @@ async function begin(input: AppConfiguration) {
 async function receive(message: unknown) {
   if (!message || typeof message !== "object" || stopping) return;
   const data = message as Record<string, unknown>;
+  if (data.type === "lifecycle-probe" && stdioBackend) {
+    send({ backendPid: process.pid });
+    return;
+  }
   if (data.type === "start" && !config) {
     await begin(data.config as AppConfiguration);
     return;
@@ -197,6 +179,7 @@ parentPort.on("message", (event) => {
       send({ fatal: true, error: safeError(error) });
     });
 });
+if (stdioBackend) process.stdin.once("end", () => void stop());
 for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const)
   process.once(signal, () => void stop());
 process.on("uncaughtException", (error) =>

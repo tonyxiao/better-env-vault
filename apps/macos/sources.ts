@@ -14,6 +14,7 @@ export interface AppSource {
 }
 export function sourceId(config: AppConfiguration): string {
   if (config.schemas.length) return "schemas";
+  if (config.serviceAccountBroker === "op-agent") return "service:op-agent";
   if (config.useDataProtectionToken) return "service:op-agent";
   const discovery = config.discovery;
   return discovery?.auth === "desktop"
@@ -75,7 +76,8 @@ export function appSources(
       id: selected,
       label: config.discovery?.serviceAccountKeychain
         ? `Service Account · ${config.discovery.serviceAccountKeychain}`
-        : config.useDataProtectionToken
+        : config.useDataProtectionToken ||
+            config.serviceAccountBroker === "op-agent"
           ? "Service Account · op-agent"
           : "Service Account · Launch session",
       schemas: [],

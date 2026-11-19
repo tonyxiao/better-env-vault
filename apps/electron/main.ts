@@ -2,10 +2,12 @@ import electron from "electron";
 import type {
   BrowserWindow as BrowserWindowType,
   MenuItemConstructorOptions,
-  UtilityProcess,
 } from "electron";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { EventEmitter } from "node:events";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -13,8 +15,9 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import type { AppConfiguration } from "../macos/configuration.js";
 import type { AppSource } from "../macos/sources.js";
@@ -41,6 +44,7 @@ interface Settings {
   selectedSource?: string;
 }
 interface ReadyRecord {
+  backendPid?: number;
   url?: string;
   launchUrl?: string;
   selectedSource?: string;
@@ -49,18 +53,71 @@ interface ReadyRecord {
   desktopAppRequired?: boolean;
   fatal?: boolean;
   error?: string;
-  sharedCredentialAvailable?: boolean;
-  sharedCredentialError?: string;
+}
+interface BackendProcess {
+  readonly pid?: number;
+  postMessage(message: unknown): void;
+  kill(): boolean;
+  on(event: "message", listener: (message: unknown) => void): this;
+  on(event: "exit", listener: () => void): this;
+  once(event: "spawn", listener: () => void): this;
 }
 interface Workspace {
   key: string;
   source?: AppSource;
-  utility: UtilityProcess;
+  utility: BackendProcess;
   window: BrowserWindowType;
   ready: boolean;
   parkedAt: number;
-  sharedCredentialAvailable?: boolean;
-  sharedCredentialError?: string;
+  opAgentBackend: boolean;
+  backendPid?: number;
+}
+
+class StdioBackend extends EventEmitter implements BackendProcess {
+  readonly child: ChildProcessWithoutNullStreams;
+  constructor(
+    executable: string,
+    args: string[],
+    environment: NodeJS.ProcessEnv,
+  ) {
+    super();
+    this.child = spawn(executable, args, {
+      env: environment,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const lines = createInterface({ input: this.child.stdout });
+    lines.on("line", (line) => {
+      try {
+        this.emit("message", JSON.parse(line));
+      } catch {
+        this.emit("message", {
+          fatal: true,
+          error: "The op-agent backend protocol returned invalid output.",
+        });
+      }
+    });
+    this.child.stdin.on("error", () => {});
+    // The broker never writes secrets to stderr. Discard and drain diagnostics so
+    // a noisy child cannot block while preserving the JSON-only stdout protocol.
+    this.child.stderr.resume();
+    this.child.once("spawn", () => this.emit("spawn"));
+    this.child.once("exit", () => this.emit("exit"));
+    this.child.once("error", () =>
+      this.emit("message", {
+        fatal: true,
+        error: "The op-agent backend could not start.",
+      }),
+    );
+  }
+  get pid() {
+    return this.child.pid;
+  }
+  postMessage(message: unknown) {
+    this.child.stdin.write(`${JSON.stringify(message)}\n`);
+  }
+  kill() {
+    return this.child.kill();
+  }
 }
 
 const argument = (name: string, values = process.argv) => {
@@ -145,9 +202,9 @@ function writeVerification(status: string, detail?: string) {
       detail,
       mainPid: process.pid,
       utilityPids: [...warm.values()].map((workspace) => workspace.utility.pid),
+      backendPids: [...warm.values()].map((workspace) => workspace.backendPid),
       selectedSource: current?.source?.id,
-      sharedCredentialAvailable: current?.sharedCredentialAvailable,
-      sharedCredentialError: current?.sharedCredentialError,
+      opAgentBackend: current?.opAgentBackend,
     }),
     { mode: 0o600 },
   );
@@ -165,6 +222,7 @@ function configFor(source?: string): AppConfiguration {
     return {
       ...base,
       discovery: { auth: "service-account" },
+      serviceAccountBroker: "op-agent",
     };
   }
   if (source?.startsWith("desktop:")) {
@@ -338,10 +396,8 @@ async function waitForWorkspace(workspace: Workspace) {
 async function handleRecord(workspace: Workspace, value: unknown) {
   if (!value || typeof value !== "object") return;
   const record = value as ReadyRecord;
-  if (record.sharedCredentialAvailable !== undefined)
-    workspace.sharedCredentialAvailable = record.sharedCredentialAvailable;
-  if (record.sharedCredentialError)
-    workspace.sharedCredentialError = record.sharedCredentialError;
+  if (Number.isSafeInteger(record.backendPid))
+    workspace.backendPid = record.backendPid;
   if (record.sources) mergeSources(record.sources);
   if (record.selectedSource) {
     const previousKey = workspace.key;
@@ -423,24 +479,59 @@ function enforceWarmLimit() {
   while (warm.size > 4 && parked.length) dispose(parked.shift()!);
 }
 
+function opAgentExecutable() {
+  const candidates = [
+    process.env.OP_AGENT_BIN,
+    join(homedir(), ".local/bin/op-agent"),
+    join(homedir(), "hub/bin/op-agent"),
+    join(homedir(), "Code/tonyxiao/hub/bin/op-agent"),
+  ].filter((value): value is string => !!value);
+  const executable = candidates.find(existsSync);
+  if (!executable)
+    throw new Error("The signed op-agent installation is unavailable.");
+  return executable;
+}
+
+function usesOpAgent(source?: string) {
+  if (source?.startsWith("service:")) return true;
+  if (argument("auth") === "service-account") return true;
+  return Boolean(
+    source === "schemas" && settings.selectedSource?.startsWith("service:"),
+  );
+}
+
+function createBackend(source?: string): BackendProcess {
+  if (usesOpAgent(source)) {
+    const environment = Object.fromEntries(
+      Object.entries(process.env).filter(
+        ([name, value]) =>
+          value !== undefined && ["HOME", "PATH", "LANG"].includes(name),
+      ) as [string, string][],
+    );
+    return new StdioBackend(
+      opAgentExecutable(),
+      ["app-backend", process.execPath, join(runtimeDirectory, "utility.js")],
+      environment,
+    );
+  }
+  return utilityProcess.fork(join(runtimeDirectory, "utility.js"), [], {
+    serviceName: "Better Env Vault 1Password",
+    stdio: "ignore",
+    env: Object.fromEntries(
+      Object.entries(process.env).filter(
+        ([name, value]) =>
+          value !== undefined &&
+          ["HOME", "PATH", "LANG", "OP_ACCOUNT"].includes(name),
+      ) as [string, string][],
+    ),
+  });
+}
+
 function startWorkspace(source?: string) {
   const key = source ?? `launch:${randomUUID()}`;
   const window = createWindow(!current);
-  const utility = utilityProcess.fork(
-    join(runtimeDirectory, "utility.js"),
-    [],
-    {
-      serviceName: "Better Env Vault 1Password",
-      stdio: "ignore",
-      env: Object.fromEntries(
-        Object.entries(process.env).filter(
-          ([name, value]) =>
-            value !== undefined &&
-            ["HOME", "PATH", "LANG", "OP_ACCOUNT"].includes(name),
-        ) as [string, string][],
-      ),
-    },
-  );
+  const opAgentBackend = usesOpAgent(source);
+  const utility = createBackend(source);
   const workspace: Workspace = {
     key,
     source: sources.get(source ?? ""),
@@ -448,6 +539,7 @@ function startWorkspace(source?: string) {
     window,
     ready: false,
     parkedAt: Date.now(),
+    opAgentBackend,
   };
   warm.set(key, workspace);
   utility.on("message", (record) => void handleRecord(workspace, record));
@@ -633,20 +725,22 @@ else {
   });
   void app.whenReady().then(async () => {
     if (lifecycleStatus) {
-      const utility = utilityProcess.fork(
-        join(runtimeDirectory, "utility.js"),
-        ["--block"],
-        {
-          serviceName: "Better Env Vault blocked lifecycle probe",
-          stdio: "ignore",
-        },
-      );
-      utility.once("spawn", () =>
+      const broker = createBackend("service:op-agent");
+      broker.on("message", (value) => {
+        const record = value as ReadyRecord;
+        if (!Number.isSafeInteger(record.backendPid) || !broker.pid) return;
         writeFileSync(
           lifecycleStatus,
-          JSON.stringify({ mainPid: process.pid, utilityPid: utility.pid }),
+          JSON.stringify({
+            mainPid: process.pid,
+            brokerPid: broker.pid,
+            backendPid: record.backendPid,
+          }),
           { mode: 0o600 },
-        ),
+        );
+      });
+      broker.once("spawn", () =>
+        broker.postMessage({ type: "lifecycle-probe" }),
       );
       return;
     }

@@ -112,7 +112,7 @@ codesign --verify --deep --strict "$installed"
     if (!signatureOnly) {
       const source = desktopAccount
         ? ` --verify-source=${JSON.stringify(`desktop:${desktopAccount}`)}`
-        : " --verify-source=service:op-agent --require-shared-credential";
+        : " --verify-source=service:op-agent --require-op-agent-backend";
       ssh(
         host,
         `set -eu

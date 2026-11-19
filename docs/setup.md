@@ -608,10 +608,12 @@ runtime dependencies, so the installed app does not need global Node or this
 checkout. Build each target architecture separately.
 
 The Electron main process owns native windows, menus, source switching, and
-lifecycle. Each source runs the existing TypeScript server in an Electron
-`utilityProcess`; Electron/Chromium reap those utility processes when the main
-process exits, including abrupt `SIGKILL`, so no custom watchdog is used. The
-renderer is sandboxed with context isolation enabled and Node integration
+lifecycle. Desktop-authenticated sources run the TypeScript server in an Electron
+`utilityProcess`. Service-account sources ask the signed `op-agent` helper to
+launch the same backend with the canonical token injected only into that child;
+the token is never returned to Electron. The backend reads a JSON-lines protocol
+from Electron's pipe and exits on EOF, including abrupt Electron termination.
+The renderer is sandboxed with context isolation enabled and Node integration
 disabled. Navigation is limited to the random loopback origin, popups are denied,
 permissions are denied, and the existing nonce, HttpOnly-cookie, Host, origin,
 mutation-token, and no-store protections remain active.
@@ -627,16 +629,17 @@ closing the window only hides it for fast reopening.
 The Accounts menu supports the canonical op-agent service account and 1Password desktop accounts.
 ⌘1–9 switch among the first nine sources. Switching is blocked during saves and
 requires confirmation before discarding drafts. The service-account token remains
-solely in the op-agent Data Protection Keychain item and is read by a narrowly
-entitled signed helper bundled with Electron; the app never creates a duplicate
-credential. Desktop authentication verifies
+solely in the op-agent Data Protection Keychain item and is read only by the
+separately installed, signed Codex Keychain Helper. That helper validates Better
+Env Vault's signature before launching its backend. Electron has no Keychain
+entitlement or provisioning profile and never creates a duplicate credential.
+Desktop authentication verifies
 1Password's separately signed SDK library before loading it; install and unlock
 1Password and enable **Settings → Developer → Integrate with other apps**.
 
-Only TX Studio and CS Mini hold the canonical op-agent service-account item. TX M5
-and TX MBA use desktop authentication. The development provisioning profile
-authorizes the same signed build on all four registered Macs; it does not copy a
-credential to any machine.
+Only TX Studio and CS Mini hold the canonical op-agent service-account item. Each
+uses its own locally built helper; helpers and Data Protection items are never
+copied between Macs. TX M5 and TX MBA use desktop authentication.
 
 To deploy the already-built signed app while preserving the previous app for
 rollback:
@@ -676,12 +679,13 @@ Run the installed-app verification with:
 ```bash
 npm run app:verify
 npm run app:verify -- --verify-source=desktop:Xiao
+npm run app:verify -- --verify-source=service:op-agent --require-op-agent-backend
 ```
 
 The verifier checks the installed signature, loads a live authenticated inventory
-without printing vault data, proves utility cleanup after normal quit, kills the
-Electron main process while a utility is deliberately blocked and proves the
-utility is reaped, and rejects unexpected persistent Chromium storage. Success is
+without printing vault data, proves backend cleanup after normal quit, kills the
+Electron main process and proves both the op-agent broker and token-bearing backend
+exit on pipe closure, and rejects unexpected persistent Chromium storage. Success is
 reported as
 `ELECTRON_SIGNATURE_INVENTORY_LIFECYCLE_AND_STORAGE_OK`. The isolated
 `npm test` suite performs no live vault mutations.

@@ -9,6 +9,7 @@ export interface AppConfiguration {
   discovery?: DiscoveryOptions;
   configureServiceAccount?: boolean;
   useDataProtectionToken?: boolean;
+  serviceAccountBroker?: "op-agent";
 }
 
 /** Prefer configured credentials, then saved credentials, then desktop auth. */

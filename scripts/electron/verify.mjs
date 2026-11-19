@@ -17,8 +17,8 @@ const argument = (name) => {
   return index >= 0 ? process.argv[index + 1] : undefined;
 };
 const expectedSource = argument("verify-source");
-const requireSharedCredential = process.argv.includes(
-  "--require-shared-credential",
+const requireOpAgentBackend = process.argv.includes(
+  "--require-op-agent-backend",
 );
 
 function existsProcess(pid) {
@@ -77,13 +77,14 @@ if (expectedSource && result.selectedSource !== expectedSource)
   throw new Error(
     `Expected Electron source ${expectedSource}, got ${result.selectedSource ?? "none"}.`,
   );
-if (requireSharedCredential && result.sharedCredentialAvailable !== true)
-  throw new Error(
-    `Shared Data Protection credential unavailable: ${result.sharedCredentialError ?? "unknown"}.`,
-  );
+if (requireOpAgentBackend && result.opAgentBackend !== true)
+  throw new Error("Electron did not use the op-agent backend broker.");
 for (const pid of result.utilityPids ?? [])
   if (existsProcess(pid))
     throw new Error(`Utility process ${pid} survived normal app quit.`);
+for (const pid of result.backendPids ?? [])
+  if (existsProcess(pid))
+    throw new Error(`Token-bearing backend ${pid} survived normal app quit.`);
 
 const lifecyclePath = await fresh("lifecycle");
 const main = spawn(executable, [`--lifecycle-status=${lifecyclePath}`], {
@@ -93,12 +94,19 @@ const main = spawn(executable, [`--lifecycle-status=${lifecyclePath}`], {
 const lifecycle = await waitForFile(lifecyclePath, 10_000);
 process.kill(lifecycle.mainPid, "SIGKILL");
 const deadline = Date.now() + 5_000;
-while (existsProcess(lifecycle.utilityPid) && Date.now() < deadline)
+while (
+  (existsProcess(lifecycle.brokerPid) || existsProcess(lifecycle.backendPid)) &&
+  Date.now() < deadline
+)
   await delay(50);
 await unlink(lifecyclePath);
-if (existsProcess(lifecycle.utilityPid))
+if (existsProcess(lifecycle.brokerPid))
   throw new Error(
-    `Utility process ${lifecycle.utilityPid} survived forced main-process death.`,
+    `op-agent broker ${lifecycle.brokerPid} survived forced main-process death.`,
+  );
+if (existsProcess(lifecycle.backendPid))
+  throw new Error(
+    `Token-bearing backend ${lifecycle.backendPid} survived forced main-process death.`,
   );
 if (existsProcess(main.pid)) main.kill("SIGKILL");
 

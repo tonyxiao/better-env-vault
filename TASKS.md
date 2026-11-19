@@ -34,3 +34,4 @@
 - [x] Commit and push the follow-up fixes and credential-placement correction.
 - [x] Register all four Macs and generate the shared-Keychain development profile; deploy one identical build without transferring or saving service-account credentials.
 - [x] Verify canonical shared access after deleting the classic `better-env-vault` and `better-env-vault-electron` entries on TX Studio and CS Mini; `op-agent vault list` and Electron live inventory still pass on both.
+- [ ] Replace Electron's shared-Keychain entitlement/profile with the signed `op-agent` backend broker; verify token isolation and forced-death cleanup on Studio and CS Mini.
