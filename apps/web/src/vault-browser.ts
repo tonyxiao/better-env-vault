@@ -27,6 +27,7 @@ import { SnapshotCache } from "./snapshot-cache.js";
 
 const environment = "vault";
 const concurrentVaults = 6;
+const vaultSnapshotTtlMs = 5 * 60_000;
 const name = z.string().regex(variableName);
 const value = z
   .string()
@@ -85,7 +86,9 @@ function identity(vault: VaultInfo, items: VaultItem[]) {
 export class VaultBrowser {
   private pending?: Promise<Provider>;
   private vaults = new Map<string, VaultInfo>();
-  private snapshots = new SnapshotCache<VaultItem[]>();
+  // Keep decrypted values in process memory only. Explicit refresh and edits
+  // invalidate this cache; nothing is persisted across app launches.
+  private snapshots = new SnapshotCache<VaultItem[]>(vaultSnapshotTtlMs);
   private inventories = new Map<
     string,
     { fingerprint: string; items: Map<string, { id: string; version: number }> }

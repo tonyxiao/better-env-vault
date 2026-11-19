@@ -97,6 +97,7 @@ export function normalizeItems(
 }
 
 export class OnePasswordProvider implements Provider {
+  private static readonly concurrentItemBatches = 3;
   private allowed: Set<string>;
   private initialVaults?: VaultInfo[];
   takeInitialVaults() {
@@ -207,37 +208,54 @@ export class OnePasswordProvider implements Provider {
           i.state === ItemState.Active,
       );
       const items: Item[] = [];
-      // Batch requests are sequential; each batch bounds decrypted data and SDK request sizes.
-      for (let offset = 0; offset < list.length; offset += 50) {
-        const batch = await this.client.items.getAll(
-          vaultId,
-          list.slice(offset, offset + 50).map((i) => i.id),
-        );
-        if (
-          batch.individualResponses.length !==
-          Math.min(50, list.length - offset)
-        )
-          throw new VaultError(
-            "1Password returned an incomplete item batch.",
-            "provider",
-            502,
-          );
-        for (const response of batch.individualResponses) {
-          if (response.error || !response.content)
-            throw new VaultError(
-              "An item could not be read. Refresh and check permissions.",
-              "provider",
-              502,
-            );
-          if (response.content.vaultId !== vaultId)
-            throw new VaultError(
-              "1Password returned an item from an unexpected vault.",
-              "provider",
-              502,
-            );
-          items.push(response.content);
-        }
-      }
+      const batches = Array.from(
+        { length: Math.ceil(list.length / 50) },
+        (_, index) => list.slice(index * 50, index * 50 + 50),
+      );
+      const results = new Array<Item[]>(batches.length);
+      let nextBatch = 0;
+      await Promise.all(
+        Array.from(
+          {
+            length: Math.min(
+              OnePasswordProvider.concurrentItemBatches,
+              batches.length,
+            ),
+          },
+          async () => {
+            while (nextBatch < batches.length) {
+              const index = nextBatch++;
+              const requested = batches[index];
+              const batch = await this.client.items.getAll(
+                vaultId,
+                requested.map((item) => item.id),
+              );
+              if (batch.individualResponses.length !== requested.length)
+                throw new VaultError(
+                  "1Password returned an incomplete item batch.",
+                  "provider",
+                  502,
+                );
+              results[index] = batch.individualResponses.map((response) => {
+                if (response.error || !response.content)
+                  throw new VaultError(
+                    "An item could not be read. Refresh and check permissions.",
+                    "provider",
+                    502,
+                  );
+                if (response.content.vaultId !== vaultId)
+                  throw new VaultError(
+                    "1Password returned an item from an unexpected vault.",
+                    "provider",
+                    502,
+                  );
+                return response.content;
+              });
+            }
+          },
+        ),
+      );
+      items.push(...results.flat());
       const warnings: string[] = [];
       const normalized = normalizeItems(
         items,

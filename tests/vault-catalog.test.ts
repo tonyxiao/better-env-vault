@@ -140,7 +140,7 @@ it("reveals one credential after vault snapshots expire without rereading the en
     )!;
     const readVault = vi.spyOn(provider, "readVault");
     const readItem = vi.spyOn(provider, "readItem");
-    await vi.advanceTimersByTimeAsync(30_001);
+    await vi.advanceTimersByTimeAsync(300_001);
     const request = {
       environment: "vault",
       name: row.variable.name,
@@ -157,7 +157,7 @@ it("reveals one credential after vault snapshots expire without rereading the en
     expect(readVault).not.toHaveBeenCalled();
     expect(readItem).toHaveBeenCalledTimes(1);
     expect(readItem).toHaveBeenCalledWith(dev, row.variable.itemId);
-    await vi.advanceTimersByTimeAsync(30_001);
+    await vi.advanceTimersByTimeAsync(300_001);
     provider.vaults[dev][0].version++;
     await expect(browser.reveal(dev, request)).rejects.toThrow("changed");
     expect(readVault).not.toHaveBeenCalled();

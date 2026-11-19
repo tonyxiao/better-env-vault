@@ -62,6 +62,34 @@ function fixture() {
 }
 
 describe("SDK adapter contract", () => {
+  it("loads large vault batches concurrently with a bounded fan-out", async () => {
+    const { provider, client, item } = fixture();
+    const items = Array.from({ length: 151 }, (_, index) => ({
+      ...structuredClone(item),
+      id: `item-${index}`,
+      title: `KEY_${String(index).padStart(3, "0")}`,
+    }));
+    client.items.list.mockResolvedValue(
+      items.map((entry) => ({ ...entry, state: ItemState.Active })),
+    );
+    let active = 0;
+    let maxActive = 0;
+    const getAll = vi.fn(async (_vaultId: string, ids: string[]) => {
+      maxActive = Math.max(maxActive, ++active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active--;
+      return {
+        individualResponses: ids.map((id) => ({
+          content: structuredClone(items.find((entry) => entry.id === id)!),
+        })),
+      };
+    });
+    client.items.getAll = getAll as unknown as typeof client.items.getAll;
+    await expect(provider.readVault(vault)).resolves.toHaveLength(151);
+    expect(getAll).toHaveBeenCalledTimes(4);
+    expect(maxActive).toBe(3);
+  });
+
   it("limits requests to configured vaults and rejects failed batch entries without raw diagnostics", async () => {
     const { provider, client } = fixture();
     await expect(provider.readVault("outside")).rejects.toThrow("outside");
